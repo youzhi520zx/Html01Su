@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Three.js 物理跟随粒子系统</title>
+    <style>
+        :root {
+            --primary: #00f2ff;
+            --panel-bg: rgba(10, 10, 12, 0.8);
+            --border: rgba(255, 255, 255, 0.15);
+        }
+
+        body {
+            margin: 0; overflow: hidden; background: #000;
+            font-family: 'Segoe UI', sans-serif; color: white;
+            user-select: none;
+        }
+
+        #video-input { display: none; transform: scaleX(-1); }
+
+        /* 背景：深空 */
+        #canvas-container {
+            position: absolute; inset: 0; z-index: 1;
+            background: radial-gradient(circle at center, #1a1a24 0%, #000 100%);
+        }
+
+        /* 控制面板 */
+        #ui-panel {
+            position: absolute; top: 20px; right: 20px; width: 260px;
+            background: var(--panel-bg);
+            backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px);
+            border: 1px solid var(--border);
+            border-radius: 12px; padding: 20px; z-index: 10;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.6);
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        h2 {
+            margin: 0 0 15px 0; font-size: 14px; text-transform: uppercase;
+            letter-spacing: 2px; color: var(--primary); text-align: center;
+            border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px;
+        }
+
+        .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 15px; }
+
+        button {
+            background: rgba(255,255,255,0.08); border: 1px solid transparent;
+            color: #ccc; padding: 10px 0; border-radius: 6px; cursor: pointer;
+            font-size: 12px; transition: 0.2s;
+        }
+        button:hover { background: rgba(255,255,255,0.2); color: white; }
+        button.active {
+            background: var(--primary); color: #000; font-weight: bold;
+            box-shadow: 0 0 15px rgba(0, 242, 255, 0.3);
+        }
+
+        .control-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; font-size: 12px; color: #aaa; }
+        input[type="color"] { width: 60px; height: 25px; border: none; background: none; cursor: pointer; }
+
+        #status {
+            padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px;
+            font-size: 12px; text-align: center; border-left: 3px solid #555;
+            transition: 0.3s;
+        }
+
+        /* 加载 */
+        #loader {
+            position: fixed; inset: 0; background: #000; z-index: 100;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+        }
+        .pulse {
+            width: 60px; height: 60px; background: var(--primary);
+            border-radius: 50%; animation: pulse-anim 1.5s infinite;
+        }
+        @keyframes pulse-anim { 0% { transform: scale(0.8); opacity: 0.5; } 100% { transform: scale(1.5); opacity: 0; } }
+    </style>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+</head>
+<body>
+
+<div id="loader">
+    <div class="pulse"></div>
+    <p style="color:#666; margin-top:20px; font-size:12px;">正在初始化物理引擎...</p>
+</div>
+
+<div id="ui-panel">
+    <h2>流体跟随系统</h2>
+    <div class="btn-grid">
+        <button onclick="setMode('sphere')" class="active" id="btn-sphere">🔮 灵球</button>
+        <button onclick="setMode('heart')" id="btn-heart">❤️ 脉动</button>
+        <button onclick="setMode('shield')" id="btn-shield">🛡️ 力场</button>
+        <button onclick="setMode('dna')" id="btn-dna">🧬 基因</button>
+        <button onclick="setMode('cube')" id="btn-cube">🧊 晶体</button>
+        <button onclick="setMode('cloud')" id="btn-cloud">☁️ 星云</button>
+    </div>
+
+    <div class="control-row">
+        <span>粒子色调</span>
+        <input type="color" id="colorPicker" value="#00f2ff">
+    </div>
+
+    <div id="status">等待手势...</div>
+</div>
+
+<video id="video-input"></video>
+<div id="canvas-container"></div>
+
+<script>
+    // --- 1. Three.js 场景 ---
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x050505, 0.0015);
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.z = 55;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+    // --- 2. 粒子数据结构 ---
+    const COUNT = 16000;
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(COUNT * 3);
+    
+    // 存储不同形态的数据
+    const shapes = { sphere:[], heart:[], shield:[], dna:[], cube:[], cloud:[] };
+    // 存储全屏扩散态的数据
+    const homePositions = new Float32Array(COUNT * 3);
+    
+    // 初始化数据
+    function initData() {
+        const vec = new THREE.Vector3();
+        
+        for(let i=0; i<COUNT; i++) {
+            // 1. 全屏态 (Home) - 像空气一样弥漫
+            homePositions[i*3] = (Math.random()-0.5) * 200;
+            homePositions[i*3+1] = (Math.random()-0.5) * 120;
+            homePositions[i*3+2] = (Math.random()-0.5) * 100;
+            
+            // 初始位置
+            positions[i*3] = homePositions[i*3];
+            positions[i*3+1] = homePositions[i*3+1];
+            positions[i*3+2] = homePositions[i*3+2];
+
+            // 2. 形状态 (Offsets)
+            // Sphere
+            getPointOnSphere(12, vec);
+            shapes.sphere.push(vec.x, vec.y, vec.z);
+
+            // Heart
+            let t = Math.random() * Math.PI * 2;
+            let hx = 16 * Math.pow(Math.sin(t), 3);
+            let hy = 13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t);
+            let hz = (Math.random()-0.5) * 4;
+            let s = Math.random(); // 填充
+            shapes.heart.push(hx*s, (hy*s)+2, hz*s);
+
+            // Shield (半圆护盾)
+            getPointOnSphere(14, vec);
+            if(vec.z < 0) vec.z *= 0.1; // 压扁背面
+            shapes.shield.push(vec.x, vec.y, vec.z);
+
+            // DNA
+            let dh = (Math.random()-0.5)*40;
+            let ang = dh * 0.5;
+            let off = (i%2===0)?0:Math.PI;
+            shapes.dna.push(Math.cos(ang+off)*6, dh, Math.sin(ang+off)*6);
+
+            // Cube
+            let edge = 18;
+            shapes.cube.push((Math.random()-0.5)*edge, (Math.random()-0.5)*edge, (Math.random()-0.5)*edge);
+
+            // Cloud (扁平星云)
+            let cr = Math.random()*20;
+            let ca = Math.random()*Math.PI*2;
+            shapes.cloud.push(Math.cos(ca)*cr, (Math.random()-0.5)*4, Math.sin(ca)*cr);
+        }
+    }
+
+    function getPointOnSphere(r, target) {
+        const u = Math.random(), v = Math.random();
+        const theta = 2 * Math.PI * u;
+        const phi = Math.acos(2 * v - 1);
+        target.x = r * Math.sin(phi) * Math.cos(theta);
+        target.y = r * Math.sin(phi) * Math.sin(theta);
+        target.z = r * Math.cos(phi);
+    }
+
+    initData();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+    // 材质
+    const sprite = new THREE.TextureLoader().load('https://threejs.org/examples/textures/sprites/disc.png');
+    const material = new THREE.PointsMaterial({
+        size: 0.5,
+        color: 0x00f2ff,
+        map: sprite,
+        transparent: true,
+        opacity: 0.8,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+    });
+
+    const particles = new THREE.Points(geometry, material);
+    scene.add(particles);
+
+    // --- 3. 交互逻辑 ---
+    let currentShape = shapes.sphere;
+    let handPos = new THREE.Vector3(0,0,0);
+    // 用于物理平滑的向量
+    let smoothHandPos = new THREE.Vector3(0,0,0); 
+    // handPower: 0 = 散开, 1 = 聚拢
+    let handPower = 0; 
+    let hasHand = false;
+
+    window.setMode = (mode) => {
+        currentShape = shapes[mode];
+        document.querySelectorAll('.btn-grid button').forEach(b => b.classList.remove('active'));
+        document.getElementById('btn-'+mode).classList.add('active');
+    };
+    document.getElementById('colorPicker').addEventListener('input', e => material.color.set(e.target.value));
+
+    // --- 4. 视觉处理 ---
+    const statusDiv = document.getElementById('status');
+
+    function onResults(results) {
+        document.getElementById('loader').style.display = 'none';
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            hasHand = true;
+            const lm = results.multiHandLandmarks[0];
+
+            // 1. 坐标映射 (手心位置)
+            // 将 0-1 映射到 3D 世界坐标 (-x ~ +x)
+            // 视差修正：根据相机 Z=55，大致视野宽 100，高 60
+            const x = (0.5 - lm[9].x) * 100;
+            const y = (0.5 - lm[9].y) * 60;
+            handPos.set(x, y, 0);
+
+            // 2. 计算张合 (拇指4 - 食指8)
+            const d = Math.sqrt(
+                Math.pow(lm[4].x - lm[8].x, 2) + Math.pow(lm[4].y - lm[8].y, 2)
+            );
+
+            // 映射：<0.05 捏合(1), >0.15 张开(0)
+            let targetPower = (0.15 - d) * 10;
+            targetPower = Math.max(0, Math.min(1, targetPower));
+            
+            // 平滑插值
+            handPower += (targetPower - handPower) * 0.15;
+
+            // UI
+            if(handPower > 0.6) {
+                statusDiv.innerText = "✊ 实体化 (Drag)";
+                statusDiv.style.borderLeftColor = "#00ff88";
+                statusDiv.style.color = "#00ff88";
+            } else {
+                statusDiv.innerText = "🖐 气态化 (Flow)";
+                statusDiv.style.borderLeftColor = "#00f2ff";
+                statusDiv.style.color = "#fff";
+            }
+        } else {
+            hasHand = false;
+            // 无手时，power 归零，手位置归中
+            handPower += (0 - handPower) * 0.05;
+            handPos.set(0, 0, 0);
+            statusDiv.innerText = "寻找手势...";
+            statusDiv.style.borderLeftColor = "#555";
+            statusDiv.style.color = "#888";
+        }
+    }
+
+    const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+    hands.setOptions({maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6});
+    hands.onResults(onResults);
+    
+    const cam = new Camera(document.getElementById('video-input'), {
+        onFrame: async () => await hands.send({image: document.getElementById('video-input')}),
+        width: 640, height: 480
+    });
+    cam.start();
+
+    // --- 5. 物理引擎 (核心：惯性与变动) ---
+    const clock = new THREE.Clock();
+
+    function animate() {
+        requestAnimationFrame(animate);
+        const time = clock.getElapsedTime();
+
+        // A. 手部位置平滑 (惯性跟随)
+        // lerp 因子越小，拖尾感越强。0.08 感觉像在水里拖动。
+        smoothHandPos.lerp(handPos, 0.08);
+
+        // B. 视差倾斜 (Parallax Tilt) - 取代自转
+        // 根据手在屏幕的位置，微调粒子系统的角度
+        // 手在左边，物体稍向左倾斜
+        const tiltX = smoothHandPos.y * 0.005; // 上下移动导致绕X轴转
+        const tiltY = smoothHandPos.x * 0.005; // 左右移动导致绕Y轴转
+        particles.rotation.x = -tiltX;
+        particles.rotation.y = tiltY;
+
+        // C. 粒子位置更新
+        const pArr = particles.geometry.attributes.position.array;
+
+        for(let i=0; i<COUNT; i++) {
+            const idx = i*3;
+
+            // 1. 基础呼吸噪音 (Variation)
+            // 即使不动，粒子也在微微起伏，模拟生物感
+            const noiseAmp = 0.5; // 振幅
+            const noiseFreq = 0.5; // 频率
+            const noiseX = Math.sin(time * noiseFreq + i) * noiseAmp;
+            const noiseY = Math.cos(time * noiseFreq + i * 0.5) * noiseAmp;
+            const noiseZ = Math.sin(time * noiseFreq + i * 0.2) * noiseAmp;
+
+            // 2. 目标位置计算
+            // 状态 0 (散开): 原始全屏位置 + 呼吸
+            const homeX = homePositions[idx] + noiseX * 3; // 散开时呼吸幅度大
+            const homeY = homePositions[idx+1] + noiseY * 3;
+            const homeZ = homePositions[idx+2] + noiseZ * 3;
+
+            // 状态 1 (聚拢): 手心位置 + 形状偏移 + 呼吸
+            const shapeX = smoothHandPos.x + currentShape[idx] + noiseX;
+            const shapeY = smoothHandPos.y + currentShape[idx+1] + noiseY;
+            const shapeZ = smoothHandPos.z + currentShape[idx+2] + noiseZ;
+
+            // 3. 混合位置
+            const targetX = homeX + (shapeX - homeX) * handPower;
+            const targetY = homeY + (shapeY - homeY) * handPower;
+            const targetZ = homeZ + (shapeZ - homeZ) * handPower;
+
+            // 4. 粒子飞行 (Lerp)
+            // 每个粒子有不同的飞行速度，造成“拉扯”的效果
+            const speed = 0.1 + (i % 10) * 0.01; // 0.1 ~ 0.2 随机速度
+            
+            pArr[idx]   += (targetX - pArr[idx])   * speed;
+            pArr[idx+1] += (targetY - pArr[idx+1]) * speed;
+            pArr[idx+2] += (targetZ - pArr[idx+2]) * speed;
+        }
+
+        particles.geometry.attributes.position.needsUpdate = true;
+        renderer.render(scene, camera);
+    }
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    animate();
+</script>
+</body>
+</html>

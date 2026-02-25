@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>森之庭院 - 导航</title>
+    <!-- 引入优雅的字体 -->
+    <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@700&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        /* --- 全局样式变量 --- */
+        :root {
+            /* 清新绿色系 */
+            --primary-green: #88c999;  /* 主色调：柔和的薄荷绿 */
+            --soft-green: #e3f6e8;     /* 背景色：极浅的薄荷奶白 */
+            --deep-green: #4a6b55;     /* 文字色：优雅的森林绿 */
+            --accent-gold: #f0e68c;    /* 点缀：淡金色 */
+            
+            /* 卡片样式 */
+            --card-bg: rgba(255, 255, 255, 0.75); /* 半透明白色 */
+            --card-border: rgba(255, 255, 255, 0.9);
+            --shadow: 0 8px 32px 0 rgba(136, 201, 153, 0.2);
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            font-family: 'Noto Serif SC', 'Segoe UI', serif;
+            background-color: var(--soft-green);
+            /* 柔和的背景渐变，像清晨的森林 */
+            background-image: linear-gradient(135deg, #fdfbfb 0%, #ebedee 100%);
+            background: radial-gradient(circle at top left, #eafcf0, #fdfbfb);
+            color: var(--deep-green);
+            overflow: hidden; 
+        }
+
+        /* 装饰背景：漂浮的叶子或光斑 */
+        .bg-decoration {
+            position: absolute;
+            width: 300px;
+            height: 300px;
+            background: radial-gradient(circle, rgba(136, 201, 153, 0.2) 0%, transparent 70%);
+            border-radius: 50%;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        /* --- 容器通用样式 --- */
+        .container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            transition: all 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55); /* 更有弹性的动画 */
+            z-index: 10;
+        }
+
+        /* --- 1. 欢迎页 (入口) --- */
+        #welcome-page {
+            z-index: 20;
+            /* 森林公主风格的渐变 */
+            background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+            /* 或者纯净的绿色渐变 */
+            background: linear-gradient(to top, #96fbc4 0%, #f9f586 100%); 
+            /* 修正为更清新的淡绿+白渐变 */
+            background: linear-gradient(160deg, #d4fc79 0%, #96e6a1 100%);
+        }
+
+        #welcome-page.hidden {
+            transform: translateY(-100%) scale(0.8);
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        h1 {
+            font-family: 'Dancing Script', cursive;
+            font-size: 3.5rem;
+            color: #fff;
+            text-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 50px;
+        }
+
+        .enter-btn {
+            padding: 18px 50px;
+            font-size: 1.3rem;
+            color: #5e8c6a;
+            font-weight: bold;
+            background: rgba(255, 255, 255, 0.85);
+            border: 2px solid #fff;
+            border-radius: 50px;
+            cursor: pointer;
+            backdrop-filter: blur(5px);
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+            font-family: 'Noto Serif SC', serif;
+        }
+
+        .enter-btn:hover {
+            background: white;
+            color: var(--primary-green);
+            transform: translateY(-3px) scale(1.05);
+            box-shadow: 0 15px 30px rgba(136, 201, 153, 0.4);
+        }
+
+        /* --- 2. 列表页 --- */
+        #list-page {
+            z-index: 10;
+            opacity: 0;
+            transform: scale(0.9);
+            overflow-y: auto; 
+            padding: 20px;
+            box-sizing: border-box;
+            display: flex;
+            justify-content: flex-start; 
+            padding-top: 90px;
+            background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2388c999' fill-opacity='0.1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+        }
+
+        #list-page.active {
+            opacity: 1;
+            transform: scale(1);
+        }
+
+        /* 返回按钮 */
+        .back-btn {
+            position: fixed; /* 固定在顶部，不随滚动移动 */
+            top: 25px;
+            left: 25px;
+            padding: 10px 25px;
+            background: rgba(255, 255, 255, 0.9);
+            border: 2px solid #e3f6e8;
+            border-radius: 30px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            cursor: pointer;
+            font-weight: bold;
+            color: var(--deep-green);
+            transition: all 0.3s;
+            z-index: 100;
+            font-family: 'Dancing Script', cursive;
+            font-size: 1.2rem;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .back-btn:hover {
+            background: #fff;
+            transform: translateX(-5px);
+            color: var(--primary-green);
+            border-color: var(--primary-green);
+        }
+
+        /* 按钮网格布局 */
+        .grid-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); /* 自适应列宽 */
+            gap: 25px;
+            width: 100%;
+            max-width: 900px;
+            margin-bottom: 50px;
+            position: relative;
+            z-index: 5;
+        }
+
+        /* 单个功能按钮 (卡片) */
+        .link-card {
+            background: var(--card-bg);
+            backdrop-filter: blur(12px); /* 毛玻璃特效 */
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--card-border);
+            border-radius: 25px; /* 更圆润的边角 */
+            padding: 20px 15px;
+            text-align: center;
+            text-decoration: none;
+            color: var(--deep-green);
+            box-shadow: var(--shadow);
+            transition: all 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* 鼠标悬停特效 */
+        .link-card:hover {
+            transform: translateY(-8px); /* 上浮 */
+            background: rgba(255, 255, 255, 0.95);
+            box-shadow: 0 15px 35px rgba(136, 201, 153, 0.3);
+            border-color: var(--primary-green);
+        }
+        
+        /* 悬停时的光泽动画 */
+        .link-card::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent);
+            transition: 0.5s;
+        }
+        
+        .link-card:hover::after {
+            left: 100%;
+        }
+
+        .icon {
+            font-size: 2.2rem;
+            margin-bottom: 5px;
+            filter: drop-shadow(0 2px 2px rgba(0,0,0,0.1));
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        
+        .link-card:hover .icon {
+            transform: scale(1.2) rotate(5deg);
+        }
+
+        .label {
+            font-weight: 700;
+            font-size: 1rem;
+            color: #3d5a45;
+        }
+
+        .desc {
+            font-size: 0.8rem;
+            color: #8fa395;
+            line-height: 1.2;
+        }
+
+        /* 滚动条美化 */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #c1e1c5;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #a3d4a9;
+        }
+
+    </style>
+</head>
+<body>
+
+    <!-- 背景装饰光斑 -->
+    <div class="bg-decoration" style="top: -50px; left: -50px;"></div>
+    <div class="bg-decoration" style="bottom: 50px; right: -50px; width: 400px; height: 400px; background: radial-gradient(circle, rgba(255, 235, 59, 0.1) 0%, transparent 70%);"></div>
+
+    <!-- 1. 入口页面 -->
+    <div id="welcome-page" class="container">
+        <h1>Welcome Princess 🌿</h1>
+        <button class="enter-btn" onclick="showList()">进入秘密花园 ➜</button>
+    </div>
+
+    <!-- 2. 列表页面 -->
+    <div id="list-page" class="container">
+        <!-- 返回按钮 -->
+        <button class="back-btn" onclick="hideList()">
+            <span>🌿</span> Return
+        </button>
+
+        <!-- 按钮列表区域 -->
+        <div class="grid-container">
+            
+            <!-- 小按钮 1 -->
+            <a href="https://www.bing.com" target="_blank" class="link-card">
+                <div class="icon">🦢</div>
+                <div class="label">百度搜索</div>
+                <div class="desc">有问题，搜一下</div>
+            </a>
+
+            <!-- 小按钮 2 -->
+            <a href="https://space.bilibili.com/1885199773?spm_id_from=333.1007.0.0" target="_blank" class="link-card">
+                <div class="icon">📺</div>
+                <div class="label">Bilibili</div>
+                <div class="desc">干杯，二次元</div>
+            </a>
+
+            <!-- 小按钮 3 -->
+            <a href="https://github.com/dashboard" target="_blank" class="link-card">
+                <div class="icon">🐱</div>
+                <div class="label">GitHub</div>
+                <div class="desc">代码托管平台</div>
+            </a>
+
+            <!-- 小按钮 4 -->
+            <a href="https://www.jd.com/" class="link-card">
+                <div class="icon">🛍️</div>
+                <div class="label">商城入口</div>
+                <div class="desc">点击购买商品</div>
+            </a>
+
+            <!-- 小按钮 5 -->
+            <a href="https://xiaopy.dpdns.org/Susu/%E8%81%94%E7%B3%BB%E6%96%B9%E5%BC%8F/%E8%81%94%E7%B3%BB%E6%96%B9%E5%BC%8F.html" class="link-card">
+                <div class="icon">💌</div>
+                <div class="label">联系我们</div>
+                <div class="desc">发送皇家信件</div>
+            </a>
+
+            <!-- 小按钮 6 -->
+            <a href="#" class="link-card">
+                <div class="icon">🏰</div>
+                <div class="label">系统设置</div>
+                <div class="desc">个人偏好设置</div>
+            </a>
+            
+            <!-- 小按钮 7 -->
+            <a href="https://xiaopy.dpdns.org" class="link-card">
+                <div class="icon">🍃</div>
+                <div class="label">返回首页</div>
+                <div class="desc">返回城堡大厅</div>
+            </a>
+            
+            <!-- 小按钮 8 -->
+            <a href="https://xiaopy.dpdns.org/Susu/%E5%9C%A3%E8%AF%9E%E6%A0%91/%E5%9C%A3%E8%AF%9E%E6%A0%91%E5%9F%BA%E6%9C%AC%E6%A8%A1%E5%9E%8B.html" class="link-card">
+                <div class="icon">🎄</div>
+                <div class="label">圣诞树交互</div>
+                <div class="desc">节日装饰</div>
+            </a>
+            
+            <!-- 小按钮 9 -->
+            <a href="https://xiaopy.dpdns.org/Susu/dy01.html" class="link-card">
+                <div class="icon">💗</div>
+                <div class="label">爱心照片</div>
+                <div class="desc">珍贵回忆</div>
+            </a>
+                        <!-- 小按钮 cs 01 -->
+            <a href="https://susugz.dpdns.org/" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">发现科技 01</div>
+                <div class="desc">Magic Test</div>
+            </a>
+
+            <!-- 小按钮 cs 01 -->
+            <a href="https://xiaopy.dpdns.org/Susu/CS/1.1.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">测试 01</div>
+                <div class="desc">Magic Test</div>
+            </a>
+            
+            <!-- 下面是你原来的列表，样式会自动应用，无需修改结构 -->
+            <a href="https://xiaopy.dpdns.org/Susu/CS/1.2.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">02</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/01.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">03</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/02.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">04</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/03.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">05</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/04.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">06</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/05.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">07</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/06.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">08</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/07.1.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">09</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/07.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">10</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/08.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">11</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/09.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">12</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/010.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">13</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/011.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">14</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/012.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">15</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/013.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">16</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/014.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">17</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/015.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">18</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/016.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">19</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/017.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">20</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/018.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">21</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/019.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">22</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/020.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">23</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/021.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">24</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/022.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">25</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/023.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">26</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/024.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">27</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/025.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">28</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/026.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">29</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/027.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">30</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/028.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">31</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/029.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">32</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/030.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">33</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/031.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">34</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/032.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">35</div>
+                <div class="desc">测试</div>
+            </a>
+            <a href="https://xiaopy.dpdns.org/Susu/CS/033.html" class="link-card">
+                <div class="icon">🧪</div>
+                <div class="label">36</div>
+                <div class="desc">测试</div>
+            </a>
+
+        </div>
+    </div>
+
+    <script>
+        // 获取DOM元素
+        const welcomePage = document.getElementById('welcome-page');
+        const listPage = document.getElementById('list-page');
+
+        // 显示列表页函数
+        function showList() {
+            welcomePage.classList.add('hidden');
+            
+            // 稍微延迟一下显示列表，配合CSS动画
+            setTimeout(() => {
+                listPage.classList.add('active');
+            }, 300);
+        }
+
+        // 返回主页函数
+        function hideList() {
+            listPage.classList.remove('active');
+            welcomePage.classList.remove('hidden');
+        }
+    </script>
+</body>
+</html>

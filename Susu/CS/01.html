@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Cosmic Math Vortex - Three.js</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', sans-serif; }
+        #info {
+            position: absolute;
+            top: 20px;
+            width: 100%;
+            text-align: center;
+            color: rgba(120, 200, 255, 0.8);
+            pointer-events: none;
+            z-index: 10;
+            text-shadow: 0 0 10px #00eaff;
+            mix-blend-mode: screen;
+        }
+        h1 { font-size: 1.2rem; margin: 0; letter-spacing: 4px; text-transform: uppercase; }
+        p { font-size: 0.9rem; margin-top: 5px; color: rgba(255,255,255,0.5); }
+    </style>
+</head>
+<body>
+
+<div id="info">
+    <h1 id="shape-name">COSMIC VORTEX</h1>
+    <p>Math Particle System</p>
+</div>
+
+<script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+// --- 配置参数 ---
+const PARTICLE_COUNT = 80000; // 粒子数量 (宏大感来源)
+const PARTICLE_SIZE = 1.8;
+const DURATION = 3.5; // 变形时间
+const WAIT_TIME = 2.0; // 停留时间
+
+// --- 全局变量 ---
+let scene, camera, renderer, composer, controls;
+let geometry, material, points;
+let clock = new THREE.Clock();
+let currentShapeIndex = 0;
+let timeElapsed = 0;
+let isTransitioning = false;
+
+// 形状数据缓存
+const shapes = [];
+const shapeNames = [
+    "混沌宇宙 (Chaos Vortex)",
+    "伯努利双扭线 (Lemniscate)",
+    "蝴蝶曲线 (Butterfly)",
+    "阿基米德螺旋 (Spiral)",
+    "科赫雪花分形 (Koch Fractal)",
+    "玫瑰曲线 (Rose Curve)",
+    "悬链线曲面 (Catenary)",
+    "三维心形 (Cardioid)"
+];
+
+// --- 1. 初始化场景 ---
+function init() {
+    scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x000000, 0.002);
+
+    camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 2000);
+    camera.position.set(0, 0, 80);
+
+    renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.5;
+
+    // --- 后处理 (辉光效果) ---
+    const renderScene = new RenderPass(scene, camera);
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+    bloomPass.threshold = 0.1;
+    bloomPass.strength = 1.2; // 辉光强度
+    bloomPass.radius = 0.5;
+
+    composer = new EffectComposer(renderer);
+    composer.addPass(renderScene);
+    composer.addPass(bloomPass);
+
+    // --- 生成数学形状数据 ---
+    generateGeometries();
+
+    // --- 创建粒子系统 ---
+    createParticleSystem();
+
+    window.addEventListener('resize', onWindowResize);
+    animate();
+}
+
+// --- 2. 数学形状生成器 ---
+function generateGeometries() {
+    // 辅助函数：随机点
+    const getRandomPoint = () => (Math.random() - 0.5) * 100;
+    
+    // A. 混沌 (Chaos) - 随机球体分布
+    const chaos = new Float32Array(PARTICLE_COUNT * 3);
+    for(let i=0; i<PARTICLE_COUNT; i++) {
+        const r = 40 * Math.cbrt(Math.random());
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        chaos[i*3] = r * Math.sin(phi) * Math.cos(theta);
+        chaos[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+        chaos[i*3+2] = r * Math.cos(phi);
+    }
+    shapes.push(chaos);
+
+    // B. 伯努利双扭线 (Lemniscate) - 扩展到 3D
+    const lemniscate = new Float32Array(PARTICLE_COUNT * 3);
+    for(let i=0; i<PARTICLE_COUNT; i++) {
+        const t = (i / PARTICLE_COUNT) * Math.PI * 2;
+        const scale = 30;
+        const denom = 1 + Math.sin(t)*Math.sin(t);
+        const x = scale * Math.cos(t) / denom;
+        const y = scale * Math.sin(t) * Math.cos(t) / denom;
+        const z = (Math.random() - 0.5) * 10; // 增加厚度
+        
+        // 旋转以更好地展示
+        lemniscate[i*3] = x;
+        lemniscate[i*3+1] = y;
+        lemniscate[i*3+2] = z + x * Math.sin(t*4) * 0.2; // 扭曲感
+    }
+    shapes.push(lemniscate);
+
+    // C. 蝴蝶曲线 (Butterfly Curve)
+    const butterfly = new Float32Array(PARTICLE_COUNT * 3);
+    for(let i=0; i<PARTICLE_COUNT; i++) {
+        // 多圈采样以填充
+        const t = (i / PARTICLE_COUNT) * 12 * Math.PI; 
+        const e = 2.71828;
+        // 蝴蝶参数方程
+        const r = Math.pow(e, Math.sin(t)) - 2*Math.cos(4*t) + Math.pow(Math.sin((2*t - Math.PI)/24), 5);
+        const scale = 12;
+        
+        butterfly[i*3] = scale * r * Math.cos(t);
+        butterfly[i*3+1] = scale * r * Math.sin(t);
+        butterfly[i*3+2] = (Math.random() - 0.5) * 5; // Z轴厚度
+    }
+    shapes.push(butterfly);
+
+    // D. 阿基米德螺旋 (Archimedean Spiral) - 3D 龙卷风形态
+    const spiral = new Float32Array(PARTICLE_COUNT * 3);
+    for(let i=0; i<PARTICLE_COUNT; i++) {
+        const t = i / PARTICLE_COUNT * 50; 
+        const r = t * 0.8; 
+        spiral[i*3] = r * Math.cos(t);
+        spiral[i*3+1] = (i / PARTICLE_COUNT) * 60 - 30; // 高度拉伸
+        spiral[i*3+2] = r * Math.sin(t);
+    }
+    shapes.push(spiral);
+
+    // E. 科赫分形 (Koch) - 简化版：递归生成点集
+    // 由于完全递归计算量大，这里模拟一个分形星云结构
+    const koch = new Float32Array(PARTICLE_COUNT * 3);
+    const tetraPoints = [
+        [1,1,1], [-1,-1,1], [-1,1,-1], [1,-1,-1]
+    ];
+    for(let i=0; i<PARTICLE_COUNT; i++) {
+        let p = {x:0, y:0, z:0};
+        let scale = 35;
+        // 简单的 IFS 迭代模拟分形感
+        for(let iter=0; iter<5; iter++) {
+            const rIdx = Math.floor(Math.random() * 4);
+            p.x = (p.x + tetraPoints[rIdx][0]) * 0.5;
+            p.y = (p.y + tetraPoints[rIdx][1]) * 0.5;
+            p.z = (p.z + tetraPoints[rIdx][2]) * 0.5;
+        }
+        koch[i*3] = p.x * scale;
+        koch[i*3+1] = p.y * scale;
+        koch[i*3+2] = p.z * scale;
+    }
+    shapes.push(koch);
+
+    // F. 玫瑰曲线 (Rose Curve) - 3D 花球
+    const rose = new Float32Array(PARTICLE_COUNT * 3);
+    const k = 7; // 花瓣数
+    for(let i=0; i<PARTICLE_COUNT; i++) {
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.random() * Math.PI;
+        const r = 25 * Math.cos(k * theta) + 5; // 3D 变体
+        
+        rose[i*3] = r * Math.sin(phi) * Math.cos(theta);
+        rose[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+        rose[i*3+2] = r * Math.cos(phi);
+    }
+    shapes.push(rose);
+
+    // G. 悬链线 (Catenary) - 旋转曲面
+    const catenary = new Float32Array(PARTICLE_COUNT * 3);
+    const a = 10;
+    for(let i=0; i<PARTICLE_COUNT; i++) {
+        const u = (Math.random() - 0.5) * 4; // x range
+        const v = Math.random() * Math.PI * 2; // rotation
+        
+        const x = u * 15;
+        const y = a * Math.cosh(x/a) - 15; // Catenary formula
+        
+        // 绕Y轴旋转形成漏斗状
+        catenary[i*3] = x * Math.cos(v);
+        catenary[i*3+1] = y;
+        catenary[i*3+2] = x * Math.sin(v);
+    }
+    shapes.push(catenary);
+
+    // H. 心形 (Cardioid / Heart)
+    const heart = new Float32Array(PARTICLE_COUNT * 3);
+    for(let i=0; i<PARTICLE_COUNT; i++) {
+        const phi = Math.random() * Math.PI;
+        const theta = Math.random() * Math.PI * 2;
+        
+        // 3D Heart formula
+        const x = 16 * Math.pow(Math.sin(phi), 3) * Math.cos(theta);
+        const y = 16 * Math.pow(Math.sin(phi), 3) * Math.sin(theta);
+        const z = 13 * Math.cos(phi) - 5 * Math.cos(2*phi) - 2 * Math.cos(3*phi) - Math.cos(4*phi);
+        
+        // 交换轴向以竖直
+        heart[i*3] = x;
+        heart[i*3+1] = z;
+        heart[i*3+2] = y;
+    }
+    shapes.push(heart);
+}
+
+// --- 3. 创建 Shader 粒子系统 ---
+function createParticleSystem() {
+    geometry = new THREE.BufferGeometry();
+
+    // 初始位置 (Chaos)
+    const positions = new Float32Array(shapes[0]);
+    // 目标位置 (初始设为 Chaos，动画开始后更新)
+    const targets = new Float32Array(shapes[0]);
+    
+    // 颜色随机
+    const colors = new Float32Array(PARTICLE_COUNT * 3);
+    const color1 = new THREE.Color(0x00ffff); // 青色
+    const color2 = new THREE.Color(0xff00aa); // 紫红
+    
+    for(let i=0; i<PARTICLE_COUNT; i++) {
+        const mixedColor = color1.clone().lerp(color2, Math.random());
+        colors[i*3] = mixedColor.r;
+        colors[i*3+1] = mixedColor.g;
+        colors[i*3+2] = mixedColor.b;
+    }
+
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('targetPosition', new THREE.BufferAttribute(targets, 3)); // 自定义属性：目标位置
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+    // 自定义 Shader
+    material = new THREE.ShaderMaterial({
+        uniforms: {
+            uTime: { value: 0 },
+            uMix: { value: 0 }, // 插值因子 0 -> 1
+            uSize: { value: PARTICLE_SIZE * window.devicePixelRatio },
+            uColorMult: { value: 1.0 }
+        },
+        vertexShader: `
+            uniform float uTime;
+            uniform float uMix;
+            uniform float uSize;
+            
+            attribute vec3 targetPosition;
+            attribute vec3 color;
+            
+            varying vec3 vColor;
+            
+            // 简单的缓动函数 cubic-in-out
+            float easeInOut(float t) {
+                return t < 0.5 ? 4.0 * t * t * t : 1.0 - pow(-2.0 * t + 2.0, 3.0) / 2.0;
+            }
+
+            void main() {
+                vColor = color;
+                
+                // 计算当前混合位置
+                float t = easeInOut(uMix);
+                vec3 pos = mix(position, targetPosition, t);
+                
+                // 添加一些基于时间的微小噪声波动，模拟"呼吸"或"量子涨落"
+                float noise = sin(pos.y * 0.1 + uTime) * 0.5;
+                pos.x += noise;
+                pos.z += cos(pos.x * 0.1 + uTime) * 0.5;
+
+                vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                
+                // 粒子大小随深度衰减
+                gl_PointSize = uSize * (30.0 / -mvPosition.z);
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `,
+        fragmentShader: `
+            uniform float uColorMult;
+            varying vec3 vColor;
+            
+            void main() {
+                // 圆形粒子绘制
+                vec2 center = gl_PointCoord - 0.5;
+                float dist = length(center);
+                if (dist > 0.5) discard;
+                
+                // 软边缘 glow
+                float alpha = 1.0 - smoothstep(0.3, 0.5, dist);
+                
+                gl_FragColor = vec4(vColor * uColorMult, alpha);
+            }
+        `,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending // 叠加混合实现发光感
+    });
+
+    points = new THREE.Points(geometry, material);
+    scene.add(points);
+}
+
+// --- 4. 动画循环与状态机 ---
+function animate() {
+    requestAnimationFrame(animate);
+
+    const delta = clock.getDelta();
+    timeElapsed += delta;
+    
+    // 全局旋转
+    points.rotation.y += 0.001;
+    
+    // 更新 Uniforms
+    material.uniforms.uTime.value = clock.getElapsedTime();
+
+    // 状态机逻辑
+    if (!isTransitioning) {
+        if (timeElapsed > WAIT_TIME) {
+            // 开始切换到下一个形状
+            isTransitioning = true;
+            timeElapsed = 0;
+            
+            // 1. 将当前的"目标"变成"起始"位置 (在GPU buffer中交换数据太慢，我们直接更新Attribute)
+            // 实际上，我们不需要交换buffer，只需要更新 uMix 从 0 跑到 1，
+            // 跑完后，把 target 的数据设为 position，然后加载新的 target
+            
+            // 为了简化，每一帧我们都在插值。但在JS里，我们这样做：
+            // A. 把当前的 geometry.position 更新为 上一次的 targetPosition
+            // B. 设置新的 targetPosition 为 shapes[next]
+            // C. 重置 uMix = 0
+            
+            const nextIndex = (currentShapeIndex + 1) % shapes.length;
+            
+            // 更新标题
+            document.getElementById('shape-name').innerText = shapeNames[nextIndex].split(' ')[0];
+            document.getElementById('info').querySelector('p').innerText = shapeNames[nextIndex].split(' ').slice(1).join(' ');
+
+            // 获取 Attribute
+            const positionAttribute = geometry.attributes.position;
+            const targetAttribute = geometry.attributes.targetPosition;
+            
+            // 这里的逻辑：
+            // 上一轮 uMix 到了 1.0，说明屏幕上显示的是 targetPosition 的形状。
+            // 现在我们要开始新的过渡：
+            // 1. 把 positionAttribute 的数据 设为 当前显示的形状 (shapes[current])
+            // 2. 把 targetAttribute 的数据 设为 下一个形状 (shapes[next])
+            // 3. uMix 归零
+            
+            positionAttribute.array.set(shapes[currentShapeIndex]);
+            targetAttribute.array.set(shapes[nextIndex]);
+            
+            positionAttribute.needsUpdate = true;
+            targetAttribute.needsUpdate = true;
+            
+            currentShapeIndex = nextIndex;
+            material.uniforms.uMix.value = 0;
+        }
+    } else {
+        // 正在过渡中
+        const progress = Math.min(timeElapsed / DURATION, 1.0);
+        material.uniforms.uMix.value = progress;
+        
+        if (progress >= 1.0) {
+            isTransitioning = false;
+            timeElapsed = 0;
+        }
+    }
+
+    controls.update();
+    // 使用 composer 渲染以获得辉光
+    composer.render();
+}
+
+function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    composer.setSize(window.innerWidth, window.innerHeight);
+    material.uniforms.uSize.value = PARTICLE_SIZE * window.devicePixelRatio;
+}
+
+init();
+
+</script>
+</body>
+</html>

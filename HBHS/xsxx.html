@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能云点名系统 - Smart Cloud</title>
+    
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 FontAwesome 图标 -->
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <!-- 引入特效库 -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    
+    <!-- 引入现代无衬线字体 + 数字等宽字体 -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        cloud: {
+                            bg: '#0f172a',       // 深蓝底色
+                            card: 'rgba(30, 41, 59, 0.7)', // 卡片背景
+                            primary: '#3b82f6',  // 科技蓝
+                            accent: '#8b5cf6',   // 智能紫
+                            success: '#10b981',  // 成功绿
+                            text: '#e2e8f0'      // 文本白
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['"Noto Sans SC"', 'Inter', 'sans-serif'],
+                        mono: ['"Inter"', 'monospace'] // 用于数字显示
+                    },
+                    animation: {
+                        'float': 'float 6s ease-in-out infinite',
+                        'pulse-slow': 'pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'glow': 'glow 2s ease-in-out infinite alternate',
+                    },
+                    keyframes: {
+                        float: {
+                            '0%, 100%': { transform: 'translateY(0)' },
+                            '50%': { transform: 'translateY(-10px)' },
+                        },
+                        glow: {
+                            'from': { boxShadow: '0 0 10px rgba(59, 130, 246, 0.2)' },
+                            'to': { boxShadow: '0 0 20px rgba(59, 130, 246, 0.6)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <style type="text/tailwindcss">
+        @layer utilities {
+            /* 动态渐变背景 */
+            .bg-smart-gradient {
+                background-color: #0f172a;
+                background-image: 
+                    radial-gradient(at 0% 0%, hsla(253,16%,7%,1) 0, transparent 50%), 
+                    radial-gradient(at 50% 0%, hsla(225,39%,30%,1) 0, transparent 50%), 
+                    radial-gradient(at 100% 0%, hsla(339,49%,30%,1) 0, transparent 50%);
+            }
+            
+            /* 毛玻璃特效 */
+            .glass-panel {
+                background: rgba(255, 255, 255, 0.03);
+                backdrop-filter: blur(16px);
+                -webkit-backdrop-filter: blur(16px);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+            }
+
+            /* 细微网格纹理 */
+            .grid-overlay {
+                background-image: linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                                  linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+                background-size: 40px 40px;
+            }
+
+            /* 滚动条 */
+            ::-webkit-scrollbar { width: 6px; }
+            ::-webkit-scrollbar-track { background: transparent; }
+            ::-webkit-scrollbar-thumb { background: rgba(59, 130, 246, 0.3); border-radius: 3px; }
+            ::-webkit-scrollbar-thumb:hover { background: rgba(59, 130, 246, 0.6); }
+        }
+    </style>
+</head>
+<body class="bg-smart-gradient text-cloud-text min-h-screen flex flex-col items-center relative overflow-hidden selection:bg-cloud-primary selection:text-white font-sans">
+
+    <!-- 背景装饰 -->
+    <div class="fixed inset-0 pointer-events-none">
+        <div class="grid-overlay absolute inset-0"></div>
+        <!-- 漂浮的光斑 -->
+        <div class="absolute top-1/4 left-1/4 w-96 h-96 bg-blue-600/20 rounded-full blur-[100px] animate-pulse-slow"></div>
+        <div class="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-600/20 rounded-full blur-[100px] animate-pulse-slow animation-delay-2000"></div>
+    </div>
+
+    <!-- 顶部导航栏 -->
+    <div class="w-full flex justify-between items-center p-6 z-20 border-b border-white/5 bg-slate-900/50 backdrop-blur-md">
+        <div class="flex items-center gap-3">
+            <div class="w-2 h-2 bg-green-400 rounded-full animate-ping"></div>
+            <h1 class="text-xl font-bold tracking-wide text-white flex items-center gap-2">
+                <i class="fa fa-cloud text-cloud-primary"></i> 
+                智能云点名系统 <span class="text-xs font-normal text-slate-400 px-2 py-0.5 rounded border border-slate-700">v4.0 Pro</span>
+            </h1>
+        </div>
+        <div class="flex gap-4">
+            <button onclick="toggleHistory()" class="glass-panel px-4 py-2 rounded-lg hover:bg-white/10 transition-all flex items-center gap-2 text-sm group">
+                <i class="fa fa-history text-cloud-accent group-hover:scale-110 transition-transform"></i>
+                <span>历史记录</span>
+            </button>
+            <button onclick="openSettings()" class="glass-panel px-4 py-2 rounded-lg hover:bg-white/10 transition-all flex items-center gap-2 text-sm group">
+                <i class="fa fa-sliders text-cloud-primary group-hover:scale-110 transition-transform"></i>
+                <span>参数设置</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- 主控区域 -->
+    <main class="flex-grow flex flex-col items-center justify-center w-full max-w-5xl px-4 relative z-10">
+        
+        <!-- 数据仪表盘 -->
+        <div class="flex gap-12 mb-10 text-sm font-medium text-slate-400">
+            <div class="text-center">
+                <div class="text-2xl font-bold text-white font-mono" id="remainCount">0</div>
+                <div class="text-xs uppercase tracking-wider mt-1 text-cloud-primary">待选队列</div>
+            </div>
+            <div class="w-px bg-white/10 h-10"></div>
+            <div class="text-center">
+                <div class="text-2xl font-bold text-white font-mono" id="calledCount">0</div>
+                <div class="text-xs uppercase tracking-wider mt-1 text-cloud-accent">已选人数</div>
+            </div>
+            <div class="w-px bg-white/10 h-10"></div>
+            <div class="text-center">
+                <div class="text-2xl font-bold text-cloud-success font-mono" id="systemStatus">就绪</div>
+                <div class="text-xs uppercase tracking-wider mt-1">系统状态</div>
+            </div>
+        </div>
+
+        <!-- 核心显示模块 -->
+        <div class="relative w-full max-w-2xl animate-float">
+            <!-- 倒计时浮层 -->
+            <div id="countdown" class="hidden absolute -top-20 left-1/2 transform -translate-x-1/2 text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-400 z-20 font-mono tracking-widest drop-shadow-[0_0_15px_rgba(59,130,246,0.5)]">
+                00:10
+            </div>
+
+            <div class="glass-panel relative aspect-video flex flex-col items-center justify-center rounded-2xl overflow-hidden group hover:border-cloud-primary/30 transition-colors duration-500">
+                <!-- 内部光效 -->
+                <div class="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-purple-500/5 pointer-events-none"></div>
+                
+                <!-- 核心名字显示 -->
+                <div id="nameDisplay" class="text-6xl md:text-8xl font-black text-white tracking-wide transition-all duration-150 z-10 drop-shadow-lg">
+                    等待指令
+                </div>
+                
+                <div id="subStatus" class="mt-4 text-sm text-cloud-primary font-mono opacity-0 transition-opacity flex items-center gap-2">
+                    <span class="w-1.5 h-1.5 bg-cloud-primary rounded-full animate-pulse"></span>
+                    目标已锁定
+                </div>
+            </div>
+        </div>
+
+        <!-- 控制台按钮组 -->
+        <div class="mt-12 w-full flex justify-center items-center gap-6">
+            
+            <!-- 排除模式开关 -->
+            <div class="glass-panel px-5 py-3 rounded-full flex items-center gap-3 cursor-pointer hover:bg-white/5 transition-colors border border-slate-700" onclick="document.getElementById('excludeToggle').click()">
+                <div class="relative">
+                    <input type="checkbox" id="excludeToggle" class="peer sr-only" onchange="toggleExclusionMode()">
+                    <div class="w-9 h-5 bg-slate-600 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-cloud-primary"></div>
+                </div>
+                <span class="text-sm font-medium text-slate-300 select-none">不重复抽选</span>
+            </div>
+
+            <!-- 启动按钮 -->
+            <button id="rollButton" onclick="toggleRoll()" class="relative px-10 py-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-lg rounded-full shadow-lg shadow-blue-500/30 transition-all hover:scale-105 active:scale-95 group w-48 overflow-hidden">
+                <span class="relative z-10 flex items-center justify-center gap-2">
+                    <i class="fa fa-play text-sm group-hover:hidden"></i>
+                    <i class="fa fa-square text-sm hidden group-hover:block"></i>
+                    <span id="rollBtnText">开始运算</span>
+                </span>
+            </button>
+
+            <!-- 倒计时按钮 -->
+            <button id="countdownBtn" onclick="startCountdown()" class="glass-panel px-8 py-4 rounded-full hover:bg-white/10 hover:border-cloud-primary/50 text-slate-300 hover:text-white transition-all active:scale-95 flex items-center gap-2">
+                <i class="fa fa-clock-o"></i>
+                <span>倒计时</span>
+            </button>
+        </div>
+    </main>
+
+    <!-- 侧边栏：历史记录 -->
+    <div id="historyPanel" class="fixed right-0 top-0 h-full w-80 bg-slate-900/95 backdrop-blur-xl border-l border-white/10 transform translate-x-full transition-transform duration-300 z-50 shadow-2xl flex flex-col">
+        <div class="p-6 border-b border-white/5 flex justify-between items-center bg-white/5">
+            <h3 class="text-white font-bold flex items-center gap-2">
+                <i class="fa fa-list-ul text-cloud-primary"></i> 抽选日志
+            </h3>
+            <button onclick="toggleHistory()" class="text-slate-400 hover:text-white transition-colors"><i class="fa fa-times text-lg"></i></button>
+        </div>
+        <div class="flex-grow overflow-y-auto p-4 custom-scrollbar">
+            <ul id="historyList" class="space-y-3">
+                <!-- 动态插入 -->
+            </ul>
+            <div id="emptyHistoryMsg" class="flex flex-col items-center justify-center h-40 text-slate-600 text-sm">
+                <i class="fa fa-inbox text-3xl mb-2 opacity-50"></i>
+                暂无记录
+            </div>
+        </div>
+        <div class="p-5 border-t border-white/5">
+            <button onclick="resetHistory()" class="w-full py-2.5 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/10 hover:text-red-300 transition-colors text-sm font-medium flex items-center justify-center gap-2">
+                <i class="fa fa-trash-o"></i> 清空所有日志
+            </button>
+        </div>
+    </div>
+
+    <!-- 极简设置面板 -->
+    <div id="settingsModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm hidden z-50 flex items-center justify-center opacity-0 transition-opacity duration-300">
+        <div class="glass-panel w-full max-w-sm rounded-2xl overflow-hidden transform scale-95 transition-transform duration-300 bg-slate-800/80" id="settingsContent">
+            
+            <div class="px-6 py-5 border-b border-white/5 flex justify-between items-center">
+                <h3 class="font-bold text-white text-lg">系统参数配置</h3>
+                <button onclick="closeSettings()" class="text-slate-400 hover:text-white"><i class="fa fa-times text-lg"></i></button>
+            </div>
+
+            <div class="p-8 space-y-8">
+                <!-- 倒计时设置 -->
+                <div>
+                    <div class="flex justify-between items-center mb-4">
+                        <label class="text-slate-300 text-sm font-medium">倒计时时长 (秒)</label>
+                        <span id="settingDurationDisplay" class="font-mono text-xl text-cloud-primary font-bold">10</span>
+                    </div>
+                    <input type="range" id="settingDurationSlider" min="1" max="60" value="10" class="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cloud-primary">
+                    <div class="flex justify-between mt-3 text-xs">
+                        <button onclick="quickSetTime(3)" class="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white transition">3秒</button>
+                        <button onclick="quickSetTime(5)" class="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white transition">5秒</button>
+                        <button onclick="quickSetTime(10)" class="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white transition">10秒</button>
+                        <button onclick="quickSetTime(30)" class="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white transition">30秒</button>
+                    </div>
+                </div>
+
+                <!-- 音效设置 -->
+                <div class="flex justify-between items-center py-2">
+                    <label class="text-slate-300 text-sm font-medium flex items-center gap-2">
+                        <i class="fa fa-volume-up text-slate-500"></i> 交互音效
+                    </label>
+                    <div class="relative">
+                        <input type="checkbox" id="settingSound" class="peer sr-only">
+                        <div class="w-11 h-6 bg-slate-700 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cloud-success"></div>
+                    </div>
+                </div>
+
+                <!-- 锁定提示 -->
+                <div class="pt-4 border-t border-white/5">
+                    <div class="flex items-center gap-3 text-xs text-slate-500 bg-slate-900/50 p-3 rounded-lg border border-white/5">
+                        <i class="fa fa-lock text-cloud-accent text-lg"></i>
+                        <span>名单数据已固化，仅管理员可通过代码修改。</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="px-6 py-4 bg-black/20 flex justify-end">
+                <button onclick="saveSettings()" class="px-6 py-2 bg-cloud-primary hover:bg-blue-600 text-white font-medium rounded-lg transition-colors shadow-lg shadow-blue-500/20 text-sm">
+                    保存更改
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 遮罩层 -->
+    <div id="overlay" onclick="toggleHistory()" class="fixed inset-0 bg-transparent hidden z-40"></div>
+
+    <footer class="absolute bottom-4 w-full text-center text-slate-600 text-xs font-light">
+        INTELLIGENT CLOUD ROLL CALL SYSTEM v4.0
+    </footer>
+
+    <script>
+        /* 
+         * =========================================================
+         * 🔒 核心内置名单 (代码级管理)
+         * =========================================================
+         */
+        const STUDENT_DATA = [
+            "董嘉浩", "杜冠达", "杜欣怡", "冯晓", "高祎凡", 
+            "葛世博", "郝海泉", "胡函玎", "胡雨萱", "孔鹏淏", 
+            "李嘉瑞", "李静怡", "李欣洳", "刘渤武", "刘丁瑞", 
+            "刘佳琳", "刘珂浩", "刘文柏", "刘欣妍", "卢思康", 
+            "路依萱", "马诗玚", "马钰坤", "闰旭", "邵栩桐", 
+            "绳若轩", "史永浩", "苏立铎", "唐赛琪", "佟若源", 
+            "王涵赛", "王浩哲", "王佳音", "王雅冬", "王一宁", 
+            "王语彤", "王子涵", "邢锦浩", "杨怡轩", "杨增运", 
+            "姚嘉康", "张传泽", "张佳宇", "张轶群", "赵美楠", 
+            "郑鑫敏", "周灏博", "邹敬尧"
+        ];
+
+        // 全局状态管理
+        let state = {
+            availableStudents: [...STUDENT_DATA],
+            calledStudents: [],
+            isRolling: false,
+            isCountdown: false,
+            timer: null,
+            countdownTimer: null,
+            // 配置项
+            isExclusionMode: false,
+            soundEnabled: true,
+            countdownDuration: 10
+        };
+
+        // DOM 元素引用
+        const els = {
+            nameDisplay: document.getElementById('nameDisplay'),
+            subStatus: document.getElementById('subStatus'),
+            rollBtnText: document.getElementById('rollBtnText'),
+            rollBtn: document.getElementById('rollButton'),
+            countdownDisplay: document.getElementById('countdown'),
+            remainCount: document.getElementById('remainCount'),
+            calledCount: document.getElementById('calledCount'),
+            systemStatus: document.getElementById('systemStatus'),
+            historyList: document.getElementById('historyList'),
+            
+            // 面板相关
+            modal: document.getElementById('settingsModal'),
+            modalContent: document.getElementById('settingsContent'),
+            durationSlider: document.getElementById('settingDurationSlider'),
+            durationDisplay: document.getElementById('settingDurationDisplay'),
+            soundCheck: document.getElementById('settingSound'),
+            excludeToggle: document.getElementById('excludeToggle')
+        };
+
+        // === 初始化 ===
+        window.addEventListener('load', () => {
+            loadSettings();
+            updateUI();
+        });
+
+        // === 数据逻辑 ===
+        function loadSettings() {
+            const savedSettings = localStorage.getItem('smartCloud_settings');
+            const savedHistory = localStorage.getItem('smartCloud_history');
+
+            if (savedSettings) {
+                const cfg = JSON.parse(savedSettings);
+                state.countdownDuration = cfg.duration || 10;
+                state.soundEnabled = cfg.sound !== undefined ? cfg.sound : true;
+                state.isExclusionMode = cfg.exclusion !== undefined ? cfg.exclusion : false;
+            }
+
+            if (savedHistory) {
+                state.calledStudents = JSON.parse(savedHistory);
+                // 确保历史记录的有效性（防止内置名单变动后出错）
+                state.calledStudents = state.calledStudents.filter(n => STUDENT_DATA.includes(n));
+            }
+
+            refreshAvailableList();
+            
+            // 同步UI控件状态
+            els.excludeToggle.checked = state.isExclusionMode;
+            els.durationSlider.value = state.countdownDuration;
+            els.durationDisplay.innerText = state.countdownDuration;
+            els.soundCheck.checked = state.soundEnabled;
+        }
+
+        function refreshAvailableList() {
+            if (state.isExclusionMode) {
+                state.availableStudents = STUDENT_DATA.filter(n => !state.calledStudents.includes(n));
+            } else {
+                state.availableStudents = [...STUDENT_DATA];
+            }
+        }
+
+        function saveSystemState() {
+            localStorage.setItem('smartCloud_settings', JSON.stringify({
+                duration: state.countdownDuration,
+                sound: state.soundEnabled,
+                exclusion: state.isExclusionMode
+            }));
+            localStorage.setItem('smartCloud_history', JSON.stringify(state.calledStudents));
+        }
+
+        function updateUI() {
+            els.remainCount.innerText = state.availableStudents.length;
+            els.calledCount.innerText = state.calledStudents.length;
+            renderHistory();
+        }
+
+        // === 核心功能：点名 ===
+        function toggleRoll() {
+            if (state.isCountdown) return;
+            state.isRolling ? stopRoll() : startRoll();
+        }
+
+        function startRoll() {
+            if (state.availableStudents.length === 0) {
+                alert("当前队列已全部完成，请切换模式或重置记录。");
+                return;
+            }
+
+            state.isRolling = true;
+            els.rollBtnText.innerText = "停止运算";
+            els.rollBtn.classList.add('from-red-500', 'to-pink-600');
+            els.rollBtn.classList.remove('from-blue-600', 'to-indigo-600');
+            els.systemStatus.innerText = "运算中...";
+            els.systemStatus.className = "text-cloud-primary text-2xl font-bold font-mono animate-pulse";
+            
+            els.nameDisplay.classList.remove('text-cloud-primary', 'scale-110');
+            els.nameDisplay.classList.add('text-white');
+            els.subStatus.style.opacity = '0';
+
+            // 极速滚动动画
+            state.timer = setInterval(() => {
+                const name = getRandomName();
+                els.nameDisplay.innerText = name;
+                if(state.soundEnabled && Math.random() > 0.5) playTone('tick');
+            }, 60);
+        }
+
+        function stopRoll() {
+            clearInterval(state.timer);
+            state.isRolling = false;
+            els.rollBtnText.innerText = "开始运算";
+            els.rollBtn.classList.remove('from-red-500', 'to-pink-600');
+            els.rollBtn.classList.add('from-blue-600', 'to-indigo-600');
+            els.systemStatus.innerText = "就绪";
+            els.systemStatus.className = "text-cloud-success text-2xl font-bold font-mono";
+            
+            finalizeSelection();
+        }
+
+        function startCountdown() {
+            if (state.isRolling || state.isCountdown) return;
+            if (state.availableStudents.length === 0) {
+                alert("当前队列为空");
+                return;
+            }
+
+            state.isCountdown = true;
+            state.isRolling = true;
+            els.systemStatus.innerText = "倒计时...";
+            els.systemStatus.className = "text-cloud-accent text-2xl font-bold font-mono animate-pulse";
+            
+            // 锁定按钮
+            document.getElementById('countdownBtn').disabled = true;
+            document.getElementById('countdownBtn').classList.add('opacity-50', 'cursor-not-allowed');
+
+            // 显示倒计时
+            els.countdownDisplay.classList.remove('hidden');
+            let timeLeft = state.countdownDuration;
+            els.countdownDisplay.innerText = formatTime(timeLeft);
+
+            // 开始滚动名字
+            state.timer = setInterval(() => {
+                els.nameDisplay.innerText = getRandomName();
+            }, 80);
+
+            state.countdownTimer = setInterval(() => {
+                timeLeft--;
+                els.countdownDisplay.innerText = formatTime(timeLeft);
+                
+                if (timeLeft <= 3) {
+                    playTone('tick');
+                    els.countdownDisplay.classList.add('scale-125', 'text-red-400');
+                    setTimeout(()=> els.countdownDisplay.classList.remove('scale-125', 'text-red-400'), 200);
+                }
+
+                if (timeLeft <= 0) {
+                    clearInterval(state.countdownTimer);
+                    clearInterval(state.timer);
+                    finalizeSelection();
+                    
+                    state.isCountdown = false;
+                    state.isRolling = false;
+                    els.countdownDisplay.classList.add('hidden');
+                    els.systemStatus.innerText = "就绪";
+                    els.systemStatus.className = "text-cloud-success text-2xl font-bold font-mono";
+                    
+                    // 解锁按钮
+                    document.getElementById('countdownBtn').disabled = false;
+                    document.getElementById('countdownBtn').classList.remove('opacity-50', 'cursor-not-allowed');
+                }
+            }, 1000);
+        }
+
+        function finalizeSelection() {
+            const finalName = els.nameDisplay.innerText;
+            
+            // 选中特效
+            els.nameDisplay.classList.add('text-cloud-primary', 'scale-110');
+            els.subStatus.style.opacity = '1';
+            
+            playTone('success');
+            fireSmartConfetti();
+
+            // 记录数据
+            if (state.isExclusionMode) {
+                if (!state.calledStudents.includes(finalName)) {
+                    state.calledStudents.unshift(finalName);
+                }
+            } else {
+                state.calledStudents.unshift(finalName);
+            }
+            
+            refreshAvailableList();
+            saveSystemState();
+            updateUI();
+        }
+
+        // === 辅助函数 ===
+        function getRandomName() {
+            const list = state.availableStudents.length > 0 ? state.availableStudents : STUDENT_DATA;
+            const idx = Math.floor(Math.random() * list.length);
+            return list[idx];
+        }
+
+        function formatTime(seconds) {
+            return `00:${seconds < 10 ? '0'+seconds : seconds}`;
+        }
+
+        function toggleExclusionMode() {
+            state.isExclusionMode = els.excludeToggle.checked;
+            refreshAvailableList();
+            saveSystemState();
+            updateUI();
+        }
+
+        // === 面板控制 ===
+        function openSettings() {
+            els.modal.classList.remove('hidden');
+            requestAnimationFrame(() => {
+                els.modal.classList.remove('opacity-0');
+                els.modalContent.classList.remove('scale-95');
+                els.modalContent.classList.add('scale-100');
+            });
+        }
+
+        function closeSettings() {
+            els.modal.classList.add('opacity-0');
+            els.modalContent.classList.remove('scale-100');
+            els.modalContent.classList.add('scale-95');
+            setTimeout(() => {
+                els.modal.classList.add('hidden');
+            }, 300);
+        }
+
+        function quickSetTime(val) {
+            els.durationSlider.value = val;
+            els.durationDisplay.innerText = val;
+        }
+
+        els.durationSlider.addEventListener('input', (e) => {
+            els.durationDisplay.innerText = e.target.value;
+        });
+
+        function saveSettings() {
+            state.countdownDuration = parseInt(els.durationSlider.value);
+            state.soundEnabled = els.soundCheck.checked;
+            saveSystemState();
+            closeSettings();
+        }
+
+        // === 历史记录 ===
+        function toggleHistory() {
+            const panel = document.getElementById('historyPanel');
+            const overlay = document.getElementById('overlay');
+            if (panel.classList.contains('translate-x-full')) {
+                panel.classList.remove('translate-x-full');
+                overlay.classList.remove('hidden');
+            } else {
+                panel.classList.add('translate-x-full');
+                overlay.classList.add('hidden');
+            }
+        }
+
+        function renderHistory() {
+            const list = els.historyList;
+            list.innerHTML = '';
+            
+            if (state.calledStudents.length === 0) {
+                document.getElementById('emptyHistoryMsg').classList.remove('hidden');
+                return;
+            }
+            document.getElementById('emptyHistoryMsg').classList.add('hidden');
+
+            state.calledStudents.forEach((name, i) => {
+                const li = document.createElement('li');
+                li.className = 'flex justify-between items-center bg-white/5 p-3 rounded-lg border border-white/5 hover:bg-white/10 transition-colors';
+                li.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <span class="w-6 h-6 rounded-full bg-cloud-primary/20 text-cloud-primary text-xs flex items-center justify-center font-bold font-mono">${state.calledStudents.length - i}</span>
+                        <span class="text-white font-medium">${name}</span>
+                    </div>
+                    <span class="text-xs text-slate-500 font-mono">${new Date().toLocaleTimeString('zh-CN', {hour12: false})}</span>
+                `;
+                list.appendChild(li);
+            });
+        }
+
+        function resetHistory() {
+            if(confirm("确定要清空所有历史记录吗？")) {
+                state.calledStudents = [];
+                refreshAvailableList();
+                saveSystemState();
+                updateUI();
+            }
+        }
+
+        // === 音效系统 (AudioContext) ===
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        function playTone(type) {
+            if (!state.soundEnabled) return;
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            const now = audioCtx.currentTime;
+
+            if (type === 'tick') {
+                // 柔和的滴答声
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(800, now);
+                osc.frequency.exponentialRampToValueAtTime(600, now + 0.05);
+                gainNode.gain.setValueAtTime(0.05, now);
+                gainNode.gain.linearRampToValueAtTime(0, now + 0.05);
+                osc.start(now);
+                osc.stop(now + 0.05);
+            } else if (type === 'success') {
+                // 科技感和弦 (A大调)
+                const playNote = (freq, delay) => {
+                    const o = audioCtx.createOscillator();
+                    const g = audioCtx.createGain();
+                    o.type = 'sine';
+                    o.frequency.value = freq;
+                    o.connect(g);
+                    g.connect(audioCtx.destination);
+                    g.gain.setValueAtTime(0, now + delay);
+                    g.gain.linearRampToValueAtTime(0.1, now + delay + 0.05);
+                    g.gain.exponentialRampToValueAtTime(0.001, now + delay + 0.5);
+                    o.start(now + delay);
+                    o.stop(now + delay + 0.5);
+                };
+                playNote(440, 0);    // A4
+                playNote(554.37, 0.1); // C#5
+                playNote(659.25, 0.2); // E5
+            }
+        }
+
+        // === 智能粒子礼花 ===
+        function fireSmartConfetti() {
+            const colors = ['#3b82f6', '#6366f1', '#10b981', '#ffffff'];
+            confetti({
+                particleCount: 120,
+                spread: 80,
+                origin: { y: 0.6 },
+                colors: colors,
+                scalar: 0.9,
+                ticks: 200,
+                gravity: 0.8
+            });
+        }
+    </script>
+</body>
+</html>

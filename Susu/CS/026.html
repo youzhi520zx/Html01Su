@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Gesture Heart Gallery</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050505; font-family: 'Segoe UI', sans-serif; }
+        canvas { display: block; }
+        
+        /* UI 覆盖层 */
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 100;
+            color: white;
+            pointer-events: none; /* 让点击穿透到 Canvas */
+        }
+        
+        /* 文件上传按钮 */
+        .upload-btn {
+            pointer-events: auto;
+            background: rgba(255, 20, 100, 0.8);
+            border: 1px solid #ff55aa;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 30px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+            text-shadow: 0 0 5px rgba(255,255,255,0.5);
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .upload-btn:hover { background: #ff0055; box-shadow: 0 0 15px #ff0055; transform: scale(1.05); }
+        
+        /* 状态提示 */
+        #status {
+            margin-top: 10px;
+            font-size: 12px;
+            color: rgba(255,255,255,0.7);
+            background: rgba(0,0,0,0.5);
+            padding: 5px 10px;
+            border-radius: 4px;
+            display: inline-block;
+        }
+
+        /* 隐藏的视频元素用于 AI */
+        .input_video { display: none; }
+
+        /* 悬停进度条 */
+        #cursor-ring {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            border-radius: 50%;
+            pointer-events: none;
+            transform: translate(-50%, -50%);
+            display: none;
+            z-index: 999;
+        }
+        #cursor-progress {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            border-radius: 50%;
+            border: 3px solid #00ffff;
+            border-top-color: transparent;
+            border-right-color: transparent; /* 简单的旋转动画 */
+            animation: spin 0.5s linear infinite;
+            display: none;
+        }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        
+        /* 选中图片的预览层 */
+        #preview-overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 200;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s;
+        }
+        #preview-overlay.active { opacity: 1; pointer-events: auto; }
+        #preview-img {
+            max-width: 80%; max-height: 80%;
+            box-shadow: 0 0 30px rgba(255,255,255,0.2);
+            border: 2px solid white;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <label class="upload-btn">
+            📁 导入照片文件夹
+            <input type="file" id="folder-input" webkitdirectory directory multiple style="display: none;">
+        </label>
+        <br>
+        <div id="status">正在初始化 AI 模型...</div>
+    </div>
+
+    <div id="cursor-ring"><div id="cursor-progress"></div></div>
+
+    <div id="preview-overlay" onclick="closePreview()">
+        <img id="preview-img" src="">
+    </div>
+
+    <video class="input_video"></video>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // --- 全局配置 ---
+        const CONFIG = {
+            cardCount: 150,       // 照片卡片数量 (承载照片的实体)
+            dustCount: 3000,      // 氛围粒子数量
+            heartScale: 15,       // 爱心大小
+            spreadRadius: 80,     // 炸开后的半径
+            animSpeed: 0.05,      // 变形速度
+            hoverTime: 500,       // 悬停触发时间 (ms)
+        };
+
+        // --- 状态变量 ---
+        let state = {
+            isOpen: false,        // 手掌是否张开
+            hoveredObj: null,     // 当前悬停的对象
+            hoverStart: 0,        // 悬停开始时间
+            images: [],           // 加载的图片纹理
+            isPreviewing: false   // 是否正在全屏预览
+        };
+
+        let scene, camera, renderer, composer;
+        let photoGroup, dustSystem; 
+        let photoMeshes = []; // 存储所有的照片Mesh
+        let raycaster, mouse;
+        let handIndexPos = new THREE.Vector2(-100, -100); // 手指屏幕坐标
+        
+        // 目标位置数组
+        let targetPositions = []; // 存储照片Mesh的目标位置
+
+        // DOM 元素
+        const statusDiv = document.getElementById('status');
+        const cursorRing = document.getElementById('cursor-ring');
+        const cursorProgress = document.getElementById('cursor-progress');
+        const previewOverlay = document.getElementById('preview-overlay');
+        const previewImg = document.getElementById('preview-img');
+
+        initThree();
+        initParticles();
+        setupMediaPipe();
+        setupUI();
+        animate();
+
+        // ==========================================
+        // 1. Three.js 初始化
+        // ==========================================
+        function initThree() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x050505, 0.015);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 60;
+            camera.position.y = 0;
+
+            renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            document.body.appendChild(renderer.domElement);
+
+            // 后处理 - 辉光
+            const renderScene = new RenderPass(scene, camera);
+            const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+            bloomPass.threshold = 0.1;
+            bloomPass.strength = 1.2;
+            bloomPass.radius = 0.5;
+
+            composer = new EffectComposer(renderer);
+            composer.addPass(renderScene);
+            composer.addPass(bloomPass);
+
+            raycaster = new THREE.Raycaster();
+            mouse = new THREE.Vector2();
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                composer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+
+        // ==========================================
+        // 2. 粒子系统 (照片卡片 + 氛围尘埃)
+        // ==========================================
+        function initParticles() {
+            // A. 照片卡片组 (Photo Cards) - 使用 PlaneGeometry
+            photoGroup = new THREE.Group();
+            scene.add(photoGroup);
+
+            const planeGeo = new THREE.PlaneGeometry(1, 1);
+            
+            for (let i = 0; i < CONFIG.cardCount; i++) {
+                // 默认材质
+                const mat = new THREE.MeshBasicMaterial({
+                    color: new THREE.Color().setHSL(Math.random(), 0.8, 0.5),
+                    side: THREE.DoubleSide,
+                    transparent: true,
+                    opacity: 0.8
+                });
+                
+                const mesh = new THREE.Mesh(planeGeo, mat);
+                mesh.userData = { 
+                    id: i,
+                    originPos: getHeartPosition(i, CONFIG.cardCount),
+                    spreadPos: getSpherePosition(i, CONFIG.cardCount),
+                    isPhoto: false,
+                    scaleHeart: 0.3, // 爱心模式下很小
+                    scaleSpread: 6.0 // 展开模式下变大
+                };
+                
+                // 初始位置设为爱心
+                mesh.position.copy(mesh.userData.originPos);
+                mesh.scale.setScalar(mesh.userData.scaleHeart);
+                
+                // 随机旋转增加自然感
+                mesh.rotation.z = Math.random() * Math.PI;
+
+                photoGroup.add(mesh);
+                photoMeshes.push(mesh);
+            }
+
+            // B. 氛围星尘 (Dust) - 使用 Points
+            const dustGeo = new THREE.BufferGeometry();
+            const dustPos = [];
+            const dustColors = [];
+            const color1 = new THREE.Color(0xff0055);
+            const color2 = new THREE.Color(0xffaa00);
+
+            for (let i = 0; i < CONFIG.dustCount; i++) {
+                const pos = getHeartPosition(i, CONFIG.dustCount);
+                // 稍微抖动一下位置，让尘埃看起来更厚实
+                pos.x += (Math.random()-0.5) * 2;
+                pos.y += (Math.random()-0.5) * 2;
+                pos.z += (Math.random()-0.5) * 2;
+                
+                dustPos.push(pos.x, pos.y, pos.z);
+
+                const c = color1.clone().lerp(color2, Math.random());
+                dustColors.push(c.r, c.g, c.b);
+            }
+
+            dustGeo.setAttribute('position', new THREE.Float32BufferAttribute(dustPos, 3));
+            dustGeo.setAttribute('color', new THREE.Float32BufferAttribute(dustColors, 3));
+
+            const dustMat = new THREE.PointsMaterial({
+                size: 0.3,
+                vertexColors: true,
+                blending: THREE.AdditiveBlending,
+                transparent: true,
+                opacity: 0.6
+            });
+
+            dustSystem = new THREE.Points(dustGeo, dustMat);
+            scene.add(dustSystem);
+        }
+
+        // --- 数学公式：爱心 ---
+        function getHeartPosition(idx, total) {
+            // 分布在爱心表面的点
+            const t = Math.PI * 2 * Math.random();
+            const u = Math.random(); 
+            // 简单的 Parametric Heart 变体
+            const x = 16 * Math.pow(Math.sin(t), 3);
+            const y = 13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t);
+            // Z轴加厚度
+            const z = (Math.random() - 0.5) * 5; 
+
+            const vec = new THREE.Vector3(x, y, z).multiplyScalar(0.8); // 基础缩放
+            return vec;
+        }
+
+        // --- 数学公式：球体扩散 ---
+        function getSpherePosition(idx, total) {
+            const phi = Math.acos(-1 + (2 * idx) / total);
+            const theta = Math.sqrt(total * Math.PI) * phi;
+            
+            const r = CONFIG.spreadRadius;
+            const x = r * Math.cos(theta) * Math.sin(phi);
+            const y = r * Math.sin(theta) * Math.sin(phi);
+            const z = r * Math.cos(phi);
+            
+            return new THREE.Vector3(x, y, z);
+        }
+
+        // ==========================================
+        // 3. MediaPipe 手势识别
+        // ==========================================
+        function setupMediaPipe() {
+            const videoElement = document.getElementsByClassName('input_video')[0];
+
+            const hands = new Hands({locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            }});
+
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.6,
+                minTrackingConfidence: 0.5
+            });
+
+            hands.onResults(onHandResults);
+
+            const cameraUtils = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 640,
+                height: 480
+            });
+            cameraUtils.start()
+                .then(() => statusDiv.innerText = "✨ AI 就绪：张开手掌扩散，食指选择")
+                .catch(err => statusDiv.innerText = "摄像头错误: " + err);
+        }
+
+        function onHandResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+
+                // 1. 判断张开还是握拳 (计算指尖到手腕的平均距离)
+                const wrist = landmarks[0];
+                const tips = [4, 8, 12, 16, 20]; // 指尖索引
+                let avgDist = 0;
+                tips.forEach(idx => {
+                    const d = Math.sqrt(
+                        Math.pow(landmarks[idx].x - wrist.x, 2) + 
+                        Math.pow(landmarks[idx].y - wrist.y, 2)
+                    );
+                    avgDist += d;
+                });
+                avgDist /= 5;
+
+                // 阈值判断 (根据经验，握拳约 < 0.25，张开 > 0.4)
+                state.isOpen = avgDist > 0.35;
+
+                // 2. 获取食指指尖坐标 (Landmark 8) 用于交互
+                // MediaPipe x: 0(left)-1(right), y: 0(top)-1(bottom)
+                // Need to mirror x
+                const tipX = 1 - landmarks[8].x; 
+                const tipY = landmarks[8].y;
+
+                // 映射到屏幕坐标
+                handIndexPos.set(
+                    (tipX * 2) - 1, // NDC Space -1 to 1
+                    -(tipY * 2) + 1
+                );
+
+                updateCursor(landmarks[8]);
+            } else {
+                state.isOpen = false;
+                handIndexPos.set(-100, -100); // 移出屏幕
+                cursorRing.style.display = 'none';
+            }
+        }
+
+        // 更新 UI 光标位置
+        function updateCursor(landmark) {
+            // 将归一化坐标转换为像素坐标
+            // 注意：MediaPipe 视频流可能和窗口比例不同，这里做简单映射
+            const x = (1 - landmark.x) * window.innerWidth;
+            const y = landmark.y * window.innerHeight;
+            
+            cursorRing.style.display = 'block';
+            cursorRing.style.left = x + 'px';
+            cursorRing.style.top = y + 'px';
+        }
+
+
+        // ==========================================
+        // 4. 逻辑更新与动画
+        // ==========================================
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if(state.isPreviewing) return; // 预览暂停渲染节省性能
+
+            // 1. 粒子形态更新 (Lerp)
+            const dt = CONFIG.animSpeed;
+            
+            photoMeshes.forEach(mesh => {
+                let target, targetScale, targetRot;
+
+                if (state.isOpen) {
+                    target = mesh.userData.spreadPos;
+                    targetScale = mesh.userData.scaleSpread;
+                    // 张开时面向相机
+                    mesh.lookAt(camera.position); 
+                } else {
+                    target = mesh.userData.originPos;
+                    targetScale = mesh.userData.scaleHeart;
+                    mesh.rotation.set(0, 0, mesh.rotation.z); // 保持一点随机
+                }
+
+                // 插值移动
+                mesh.position.lerp(target, dt);
+                mesh.scale.lerp(new THREE.Vector3(targetScale, targetScale, 1), dt);
+            });
+
+            // 2. 氛围粒子动态 (爱心跳动)
+            const time = Date.now() * 0.002;
+            if (!state.isOpen) {
+                // 心跳效果
+                const beat = 1 + Math.sin(time * 3) * 0.05;
+                dustSystem.scale.setScalar(beat);
+            } else {
+                // 扩散效果
+                dustSystem.scale.lerp(new THREE.Vector3(3,3,3), dt);
+            }
+            dustSystem.rotation.y = time * 0.1;
+
+            // 3. 食指交互检测 (Raycasting)
+            updateInteraction();
+
+            // 渲染
+            composer.render();
+        }
+
+        function updateInteraction() {
+            if (!state.isOpen) {
+                cursorProgress.style.display = 'none';
+                return; // 只有张开时才能选照片
+            }
+
+            raycaster.setFromCamera(handIndexPos, camera);
+            
+            // 检测是否碰到照片 Mesh
+            const intersects = raycaster.intersectObjects(photoMeshes);
+
+            if (intersects.length > 0) {
+                const hitObj = intersects[0].object;
+
+                // 稍微放大被悬停的物体作为反馈
+                hitObj.scale.multiplyScalar(1.1);
+
+                if (state.hoveredObj !== hitObj) {
+                    // 新的目标
+                    state.hoveredObj = hitObj;
+                    state.hoverStart = Date.now();
+                    cursorProgress.style.display = 'block';
+                } else {
+                    // 持续悬停
+                    const elapsed = Date.now() - state.hoverStart;
+                    if (elapsed > CONFIG.hoverTime) {
+                        // 触发查看
+                        openPreview(hitObj);
+                        state.hoverStart = Date.now() + 999999; // 防止重复触发
+                        cursorProgress.style.display = 'none';
+                    }
+                }
+            } else {
+                state.hoveredObj = null;
+                cursorProgress.style.display = 'none';
+            }
+        }
+
+        // ==========================================
+        // 5. 图片处理与 UI
+        // ==========================================
+        function setupUI() {
+            const input = document.getElementById('folder-input');
+            input.addEventListener('change', handleFiles);
+
+            window.closePreview = () => {
+                previewOverlay.classList.remove('active');
+                state.isPreviewing = false;
+                animate(); // 重启动画
+            };
+        }
+
+        function handleFiles(event) {
+            const files = Array.from(event.target.files).filter(f => f.type.startsWith('image/'));
+            
+            if (files.length === 0) {
+                alert("未找到图片文件");
+                return;
+            }
+
+            statusDiv.innerText = `加载了 ${files.length} 张图片，正在生成纹理...`;
+
+            // 限制处理数量，防止卡死
+            const limit = Math.min(files.length, CONFIG.cardCount);
+            
+            for (let i = 0; i < limit; i++) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.src = e.target.result;
+                    img.onload = () => {
+                        const texture = new THREE.Texture(img);
+                        texture.needsUpdate = true;
+                        texture.colorSpace = THREE.SRGBColorSpace;
+                        
+                        // 应用到 Mesh
+                        const mesh = photoMeshes[i];
+                        mesh.material.map = texture;
+                        mesh.material.color.setHex(0xffffff); // 去掉混色，显示原图
+                        mesh.material.needsUpdate = true;
+                        mesh.userData.isPhoto = true;
+                        mesh.userData.imgSrc = e.target.result;
+                    };
+                };
+                reader.readAsDataURL(files[i]);
+            }
+        }
+
+        function openPreview(mesh) {
+            if (!mesh.userData.isPhoto) return; // 没图不打开
+
+            state.isPreviewing = true;
+            previewImg.src = mesh.userData.imgSrc;
+            previewOverlay.classList.add('active');
+        }
+
+    </script>
+</body>
+</html>

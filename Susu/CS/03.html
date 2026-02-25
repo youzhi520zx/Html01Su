@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Cosmic Math Vortex - 宇宙数学漩涡</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 20px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.8);
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 14px;
+            pointer-events: none;
+            z-index: 10;
+            text-shadow: 0 0 10px #00ffff;
+        }
+        #current-shape {
+            font-size: 24px;
+            font-weight: bold;
+            margin-top: 10px;
+            text-shadow: 0 0 20px #ff00de;
+        }
+        #music-control {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: white;
+            z-index: 20;
+            font-family: sans-serif;
+            cursor: pointer;
+            border: 1px solid white;
+            padding: 10px;
+            background: rgba(0,0,0,0.5);
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+<div id="info">
+    <div>COSMIC MATH VORTEX</div>
+    <div id="current-shape">Chaos (Initial)</div>
+</div>
+
+<div id="music-control" onclick="toggleAudio()">🎵 播放/暂停 氛围音乐</div>
+
+<audio id="bgm" loop>
+    <source src="https://cdn.pixabay.com/download/audio/2022/03/10/audio_c8c8a73467.mp3?filename=cosmic-glow-14282.mp3" type="audio/mp3">
+</audio>
+
+<script>
+    // --- 1. 初始化场景 ---
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x000000, 0.0005); // 添加雾效增加深度感
+
+    const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 1, 20000);
+    camera.position.z = 1200;
+    camera.position.y = 300;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.5;
+
+    // --- 2. 创建粒子系统 ---
+    const particleCount = 25000; // 粒子数量
+    const geometry = new THREE.BufferGeometry();
+    
+    // 存储当前位置
+    const positions = new Float32Array(particleCount * 3);
+    // 存储目标位置 (用于变形)
+    const targetPositions = new Float32Array(particleCount * 3);
+    // 存储颜色
+    const colors = new Float32Array(particleCount * 3);
+
+    const colorObj = new THREE.Color();
+
+    // 初始化：混沌状态（随机分布）
+    for (let i = 0; i < particleCount; i++) {
+        const x = (Math.random() - 0.5) * 2000;
+        const y = (Math.random() - 0.5) * 2000;
+        const z = (Math.random() - 0.5) * 2000;
+
+        positions[i * 3] = x;
+        positions[i * 3 + 1] = y;
+        positions[i * 3 + 2] = z;
+
+        // 初始目标位置等于当前位置
+        targetPositions[i * 3] = x;
+        targetPositions[i * 3 + 1] = y;
+        targetPositions[i * 3 + 2] = z;
+
+        // 初始颜色
+        colorObj.setHSL(Math.random(), 0.8, 0.5);
+        colors[i * 3] = colorObj.r;
+        colors[i * 3 + 1] = colorObj.g;
+        colors[i * 3 + 2] = colorObj.b;
+    }
+
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+    // 生成发光辉点贴图
+    function getTexture() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 32;
+        canvas.height = 32;
+        const context = canvas.getContext('2d');
+        const gradient = context.createRadialGradient(16, 16, 0, 16, 16, 16);
+        gradient.addColorStop(0, 'rgba(255,255,255,1)');
+        gradient.addColorStop(0.2, 'rgba(240,240,255,0.6)');
+        gradient.addColorStop(0.5, 'rgba(100,200,255,0.2)');
+        gradient.addColorStop(1, 'rgba(0,0,0,0)');
+        context.fillStyle = gradient;
+        context.fillRect(0, 0, 32, 32);
+        const texture = new THREE.Texture(canvas);
+        texture.needsUpdate = true;
+        return texture;
+    }
+
+    const material = new THREE.PointsMaterial({
+        size: 8,
+        map: getTexture(),
+        vertexColors: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        transparent: true,
+        opacity: 0.8
+    });
+
+    const particles = new THREE.Points(geometry, material);
+    scene.add(particles);
+
+    // --- 3. 数学形态生成器 ---
+    // 这里我们将各种数学曲线映射到三维空间
+    
+    function getShapePos(shapeType, i) {
+        // 将索引归一化到 [0, 1] 或 [0, 2PI]
+        const t = (i / particleCount) * Math.PI * 2 * 10; // 增加循环数以填满曲线
+        const p = (i / particleCount) * Math.PI * 2; 
+        
+        let x = 0, y = 0, z = 0;
+        const scale = 300; // 缩放因子
+
+        switch (shapeType) {
+            case 'Sphere (Chaos)': // 恢复球体/混沌
+                const r = 800 * Math.random();
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos((Math.random() * 2) - 1);
+                x = r * Math.sin(phi) * Math.cos(theta);
+                y = r * Math.sin(phi) * Math.sin(theta);
+                z = r * Math.cos(phi);
+                break;
+
+            case 'Archimedean Spiral': // 阿基米德螺旋 (3D 龙卷风)
+                const rt = i * 0.05; 
+                const angle = i * 0.01;
+                x = rt * Math.cos(angle);
+                z = rt * Math.sin(angle);
+                y = (i - particleCount/2) * 0.1;
+                break;
+
+            case 'Rose Curve': // 玫瑰曲线 (3D 花球)
+                const k = 4; // 花瓣数参数
+                const rRose = 600 * Math.cos(k * t * 0.1);
+                x = rRose * Math.cos(t * 0.1);
+                z = rRose * Math.sin(t * 0.1);
+                y = (Math.random() - 0.5) * 200; // 增加一点厚度
+                break;
+
+            case 'Butterfly Curve': // 蝴蝶曲线
+                // 参数方程
+                const bfT = (i / particleCount) * 12 * Math.PI;
+                const part1 = Math.pow(Math.E, Math.cos(bfT));
+                const part2 = 2 * Math.cos(4 * bfT);
+                const part3 = Math.pow(Math.sin(bfT / 12), 5);
+                const rBf = 150 * (part1 - part2 + part3);
+                
+                x = rBf * Math.sin(bfT);
+                y = rBf * Math.cos(bfT);
+                z = (Math.random() - 0.5) * 100 + x * 0.2; // 稍微倾斜增加3D感
+                break;
+            
+            case 'Lemniscate': // 伯努利双扭线 (无穷大符号)
+                const lt = (i / particleCount) * 2 * Math.PI;
+                const scaleL = 600;
+                const denom = 1 + Math.sin(lt) * Math.sin(lt);
+                x = scaleL * Math.cos(lt) / denom;
+                y = scaleL * Math.sin(lt) * Math.cos(lt) / denom;
+                z = Math.sin(lt * 3) * 100; // 在Z轴添加波动
+                break;
+
+            case 'Catenary Surface': // 悬链线 (旋转成面)
+                const cT = (i / particleCount - 0.5) * 4; // -2 to 2
+                const cAngle = (i % 100) / 100 * Math.PI * 2;
+                const cX = cT * 200;
+                const cY = 150 * Math.cosh(cT);
+                
+                // 绕Y轴旋转
+                x = cX * Math.cos(cAngle);
+                z = cX * Math.sin(cAngle);
+                y = cY - 400; // 居中
+                break;
+
+            case 'Cardioid': // 心形线 (3D 心脏)
+                const ct = (i / particleCount) * Math.PI;
+                const cp = (i % 200) / 200 * Math.PI * 2;
+                
+                // 3D Cardioid formula
+                x = 40 * 16 * Math.pow(Math.sin(ct), 3) * Math.cos(cp);
+                z = 40 * 16 * Math.pow(Math.sin(ct), 3) * Math.sin(cp);
+                y = 40 * (13 * Math.cos(ct) - 5 * Math.cos(2*ct) - 2 * Math.cos(3*ct) - Math.cos(4*ct));
+                break;
+                
+            default: // Koch Snowflake style (Fractal noise)
+                // 严格的科赫曲线在粒子数组很难做，用分形噪声球模拟
+                const rK = 600 + Math.random() * 200;
+                x = (Math.random()-0.5) * 2 * rK;
+                y = (Math.random()-0.5) * 2 * rK;
+                z = (Math.random()-0.5) * 2 * rK;
+                // 将粒子吸附到表面并添加噪点
+                const len = Math.sqrt(x*x + y*y + z*z);
+                x = (x/len) * (600 + Math.sin(len*0.1)*50);
+                y = (y/len) * (600 + Math.cos(len*0.1)*50);
+                z = (z/len) * (600 + Math.sin(x*0.05)*50);
+                break;
+        }
+        return {x, y, z};
+    }
+
+    // --- 4. 动画与切换逻辑 ---
+    const shapes = [
+        'Archimedean Spiral', 
+        'Cardioid', 
+        'Butterfly Curve', 
+        'Lemniscate', 
+        'Rose Curve',
+        'Catenary Surface',
+        'Koch / Fractal' 
+    ];
+    let currentShapeIndex = 0;
+    
+    // 切换形状函数
+    function morphToNextShape() {
+        currentShapeIndex = (currentShapeIndex + 1) % shapes.length;
+        const shapeName = shapes[currentShapeIndex];
+        
+        document.getElementById('current-shape').innerText = shapeName;
+        document.getElementById('current-shape').style.color = `hsl(${Math.random()*360}, 100%, 70%)`;
+
+        // 计算新形状的所有目标点
+        for (let i = 0; i < particleCount; i++) {
+            const pos = getShapePos(shapeName, i);
+            targetPositions[i * 3] = pos.x;
+            targetPositions[i * 3 + 1] = pos.y;
+            targetPositions[i * 3 + 2] = pos.z;
+        }
+    }
+
+    // 定时自动切换 (每5秒)
+    setInterval(morphToNextShape, 5000);
+
+    // 动画循环
+    const clock = new THREE.Clock();
+    
+    function animate() {
+        requestAnimationFrame(animate);
+        
+        const time = Date.now() * 0.0005;
+        const delta = clock.getDelta();
+
+        const positionsAttribute = geometry.attributes.position;
+        const colorsAttribute = geometry.attributes.color;
+
+        // 核心：将当前位置插值 (Lerp) 向目标位置移动
+        // 这种缓动创造了"流动"的效果
+        for (let i = 0; i < particleCount; i++) {
+            const px = positionsAttribute.array[i * 3];
+            const py = positionsAttribute.array[i * 3 + 1];
+            const pz = positionsAttribute.array[i * 3 + 2];
+
+            const tx = targetPositions[i * 3];
+            const ty = targetPositions[i * 3 + 1];
+            const tz = targetPositions[i * 3 + 2];
+
+            // 移动速度 (0.03 是缓动系数，越小越慢越平滑)
+            positionsAttribute.array[i * 3] += (tx - px) * 0.03;
+            positionsAttribute.array[i * 3 + 1] += (ty - py) * 0.03;
+            positionsAttribute.array[i * 3 + 2] += (tz - pz) * 0.03;
+
+            // 颜色随时间流转
+            const h = (time * 0.1 + i / particleCount * 0.5) % 1;
+            colorObj.setHSL(h, 0.7, 0.6); // HSL颜色空间
+            
+            colorsAttribute.array[i * 3] = colorObj.r;
+            colorsAttribute.array[i * 3 + 1] = colorObj.g;
+            colorsAttribute.array[i * 3 + 2] = colorObj.b;
+        }
+
+        positionsAttribute.needsUpdate = true;
+        colorsAttribute.needsUpdate = true;
+
+        // 整体旋转
+        particles.rotation.y = time * 0.2;
+        particles.rotation.z = time * 0.05;
+
+        controls.update();
+        renderer.render(scene, camera);
+    }
+
+    // 窗口大小调整
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    animate();
+
+    // 音频控制
+    function toggleAudio() {
+        const audio = document.getElementById('bgm');
+        if (audio.paused) {
+            audio.play();
+        } else {
+            audio.pause();
+        }
+    }
+</script>
+</body>
+</html>

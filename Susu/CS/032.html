@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Magic Shape Shifter</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', sans-serif; }
+        
+        #video-input {
+            position: absolute;
+            width: 1px; height: 1px;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ffffff;
+            font-size: 1rem;
+            letter-spacing: 4px;
+            text-shadow: 0 0 15px #ffffff;
+            pointer-events: none;
+            transition: opacity 0.5s;
+        }
+
+        #gesture-indicator {
+            position: absolute;
+            bottom: 40px;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            pointer-events: none;
+            z-index: 10;
+        }
+        
+        .indicator {
+            background: rgba(15, 15, 15, 0.6);
+            border: 1px solid rgba(255,255,255,0.15);
+            padding: 12px 28px;
+            border-radius: 50px;
+            color: rgba(255,255,255,0.3);
+            font-size: 0.9rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            transition: all 0.4s cubic-bezier(0.165, 0.84, 0.44, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            backdrop-filter: blur(10px);
+        }
+        
+        .indicator span { font-size: 1.4rem; }
+        
+        .indicator.active {
+            color: #fff;
+            background: rgba(40, 40, 40, 0.8);
+            border-color: #fff;
+            transform: scale(1.1) translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+
+        #ind-open.active { border-color: #00ffcc; color: #00ffcc; box-shadow: 0 0 30px rgba(0, 255, 204, 0.3); }
+        #ind-grab.active { border-color: #ffaa00; color: #ffaa00; box-shadow: 0 0 30px rgba(255, 170, 0, 0.3); }
+
+        /* 当前形状提示 */
+        #current-shape {
+            position: absolute;
+            top: 20px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 1.2rem;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            pointer-events: none;
+            text-shadow: 0 0 10px rgba(255,255,255,0.3);
+            opacity: 0;
+            transition: opacity 0.5s;
+        }
+    </style>
+</head>
+<body>
+
+<video id="video-input" autoplay playsinline></video>
+<div id="loading">COMPUTING GEOMETRY...</div>
+<div id="current-shape">SPHERE</div>
+
+<div id="gesture-indicator">
+    <div id="ind-open" class="indicator"><span>🖐️</span> SCATTER</div>
+    <div id="ind-grab" class="indicator"><span>✊</span> GATHER</div>
+</div>
+
+<script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+      "lil-gui": "https://unpkg.com/lil-gui@0.18.0/dist/lil-gui.esm.min.js",
+      "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/+esm"
+    }
+  }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { GUI } from 'lil-gui';
+import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
+
+// --- 配置参数 ---
+const PARTICLE_COUNT = 40000;
+const CAM_Z = 120;
+
+const params = {
+    colorScatter: '#00ccff', // 扩散色
+    colorGather: '#ffaa00',  // 聚拢色
+    baseSize: 1.5,
+    bloomStrength: 1.5,
+    autoChange: true,        // 是否自动切换形状
+    currentShape: 'Sphere'   // UI 显示用
+};
+
+// --- 全局变量 ---
+let scene, camera, renderer, composer;
+let geometry, material, points;
+let handLandmarker, videoElement;
+let clock = new THREE.Clock();
+let bloomPass;
+
+// 形状数据
+const shapesLibrary = {}; // 存储预计算的形状顶点
+const shapeNames = ['Sphere', 'Cube', 'Torus', 'DNA Helix', 'Heart', 'Saturn'];
+
+// 状态管理
+const state = {
+    hasHand: false,
+    handPos: new THREE.Vector3(0,0,0),
+    gestureVal: 0, 
+    smoothGesture: 0,
+    lastGestureState: 0, // 0=None, 1=Grab, -1=Open
+    currentShapeIndex: 0
+};
+
+// --- 1. 初始化 ---
+async function init() {
+    videoElement = document.getElementById("video-input");
+    await initVision();
+    initThree();
+    initUI();
+    document.getElementById('loading').style.opacity = 0;
+    document.getElementById('current-shape').style.opacity = 1;
+    animate();
+}
+
+// --- 2. 视觉 (MediaPipe) ---
+async function initVision() {
+    const vision = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+    );
+    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: {
+            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+            delegate: "GPU"
+        },
+        runningMode: "VIDEO",
+        numHands: 1
+    });
+    
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: "user" } });
+    videoElement.srcObject = stream;
+    
+    videoElement.addEventListener("loadeddata", () => {
+        const predictLoop = async () => {
+            if (videoElement.currentTime > 0 && !videoElement.paused) {
+                 const results = await handLandmarker.detectForVideo(videoElement, performance.now());
+                 processHandData(results);
+            }
+            requestAnimationFrame(predictLoop);
+        };
+        predictLoop();
+    });
+}
+
+function processHandData(results) {
+    const indGrab = document.getElementById('ind-grab');
+    const indOpen = document.getElementById('ind-open');
+    let currentGestureState = 0; // 0: None, 1: Grab, -1: Open
+
+    if (results.landmarks && results.landmarks.length > 0) {
+        state.hasHand = true;
+        const lm = results.landmarks[0];
+        
+        // 映射坐标
+        const x = (1.0 - lm[9].x) * 2 - 1; 
+        const y = -(lm[9].y * 2 - 1);
+        const vFOV = THREE.MathUtils.degToRad(60);
+        const height = 2 * Math.tan(vFOV / 2) * CAM_Z;
+        const width = height * (window.innerWidth / window.innerHeight);
+        state.handPos.set(x * width / 2, y * height / 2, 0);
+        
+        // 握拳检测
+        const wrist = lm[0];
+        const distSq = (p1, p2) => (p1.x - p2.x)**2 + (p1.y - p2.y)**2 + (p1.z - p2.z)**2;
+        
+        let curledCount = 0;
+        if (distSq(lm[8], wrist) < distSq(lm[5], wrist)) curledCount++; 
+        if (distSq(lm[12], wrist) < distSq(lm[9], wrist)) curledCount++; 
+        if (distSq(lm[16], wrist) < distSq(lm[13], wrist)) curledCount++; 
+        if (distSq(lm[20], wrist) < distSq(lm[17], wrist)) curledCount++; 
+
+        if (curledCount >= 3) {
+            currentGestureState = 1; // Fist
+            indGrab.classList.add('active');
+            indOpen.classList.remove('active');
+        } else {
+            currentGestureState = -1; // Open
+            indOpen.classList.add('active');
+            indGrab.classList.remove('active');
+        }
+        
+    } else {
+        state.hasHand = false;
+        currentGestureState = 0;
+        indGrab.classList.remove('active');
+        indOpen.classList.remove('active');
+    }
+
+    // --- 逻辑：检测握拳瞬间 (Trigger Change) ---
+    // 如果开启了自动切换，且从未握拳变为握拳
+    if (params.autoChange && currentGestureState === 1 && state.lastGestureState !== 1) {
+        triggerRandomShape();
+    }
+
+    state.lastGestureState = currentGestureState;
+    state.gestureVal = currentGestureState;
+}
+
+// --- 3. Three.js ---
+function initThree() {
+    scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x000000, 0.002);
+    
+    camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1000);
+    camera.position.z = CAM_Z;
+    
+    renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+    
+    const renderScene = new RenderPass(scene, camera);
+    bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+    bloomPass.threshold = 0.05;
+    bloomPass.strength = params.bloomStrength;
+    bloomPass.radius = 0.5;
+    
+    composer = new EffectComposer(renderer);
+    composer.addPass(renderScene);
+    composer.addPass(bloomPass);
+    
+    generateAllShapes();
+    createParticleSystem();
+    
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        composer.setSize(window.innerWidth, window.innerHeight);
+    });
+}
+
+// --- 4. 形状生成工厂 ---
+function generateAllShapes() {
+    const make = (fn) => {
+        const arr = new Float32Array(PARTICLE_COUNT * 3);
+        for(let i=0; i<PARTICLE_COUNT; i++) {
+            const p = fn(i, PARTICLE_COUNT);
+            arr[i*3] = p.x; arr[i*3+1] = p.y; arr[i*3+2] = p.z;
+        }
+        return arr;
+    }
+
+    // 1. Sphere
+    shapesLibrary['Sphere'] = make((i, n) => {
+        const r = 35;
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        return {x: r*Math.sin(phi)*Math.cos(theta), y: r*Math.sin(phi)*Math.sin(theta), z: r*Math.cos(phi)};
+    });
+
+    // 2. Cube
+    shapesLibrary['Cube'] = make((i, n) => {
+        const size = 50;
+        // Random point inside volume or surface? Let's do Volume for chaos, Surface for structure.
+        // Surface:
+        const face = Math.floor(Math.random()*6);
+        let x,y,z;
+        const v1 = (Math.random()-0.5)*size;
+        const v2 = (Math.random()-0.5)*size;
+        const h = size/2;
+        if(face===0) {x=h; y=v1; z=v2;} else if(face===1) {x=-h; y=v1; z=v2;}
+        else if(face===2) {y=h; x=v1; z=v2;} else if(face===3) {y=-h; x=v1; z=v2;}
+        else if(face===4) {z=h; x=v1; y=v2;} else {z=-h; x=v1; y=v2;}
+        return {x,y,z};
+    });
+
+    // 3. Torus
+    shapesLibrary['Torus'] = make((i, n) => {
+        const u = Math.random() * Math.PI * 2;
+        const v = Math.random() * Math.PI * 2;
+        const R = 30, r = 10;
+        return {x: (R+r*Math.cos(v))*Math.cos(u), y: (R+r*Math.cos(v))*Math.sin(u), z: r*Math.sin(v)};
+    });
+
+    // 4. DNA
+    shapesLibrary['DNA Helix'] = make((i, n) => {
+        const t = (i/n) * Math.PI * 20 - (Math.PI*10);
+        const r = 15;
+        const strand = i % 2 === 0 ? 0 : Math.PI;
+        return {x: r*Math.cos(t*0.5 + strand), y: t*3.0, z: r*Math.sin(t*0.5 + strand)};
+    });
+
+    // 5. Heart
+    shapesLibrary['Heart'] = make((i, n) => {
+        const phi = Math.random() * Math.PI;
+        const theta = Math.random() * Math.PI * 2;
+        // 3D Heart formula
+        const x = 20 * Math.pow(Math.sin(phi), 3) * Math.cos(theta);
+        const y = 20 * Math.pow(Math.sin(phi), 3) * Math.sin(theta);
+        const z = 18 * Math.cos(phi) - 6 * Math.cos(2*phi) - 3 * Math.cos(3*phi) - Math.cos(4*phi);
+        return {x: x, y: z, z: y}; // Swap Y/Z for upright
+    });
+
+    // 6. Saturn
+    shapesLibrary['Saturn'] = make((i, n) => {
+        if(i < n*0.4) {
+            // Planet
+            const r = 20; const theta=Math.random()*6.28; const phi=Math.acos(2*Math.random()-1);
+            return {x:r*Math.sin(phi)*Math.cos(theta), y:r*Math.sin(phi)*Math.sin(theta), z:r*Math.cos(phi)};
+        } else {
+            // Rings
+            const r = 30 + Math.random()*20; const theta = Math.random()*6.28;
+            return {x:r*Math.cos(theta), y:(Math.random()-0.5), z:r*Math.sin(theta)};
+        }
+    });
+}
+
+// --- 5. 粒子系统 ---
+function createParticleSystem() {
+    geometry = new THREE.BufferGeometry();
+    
+    // 初始化位置：默认为 Sphere
+    const posShape = new Float32Array(shapesLibrary['Sphere']);
+    
+    // 全屏散开位置
+    const posScatter = new Float32Array(PARTICLE_COUNT * 3);
+    const sizes = new Float32Array(PARTICLE_COUNT);
+    const randoms = new Float32Array(PARTICLE_COUNT);
+    
+    const vFOV = THREE.MathUtils.degToRad(60);
+    const viewHeight = 2 * Math.tan(vFOV / 2) * CAM_Z;
+    const viewWidth = viewHeight * (window.innerWidth / window.innerHeight);
+
+    for(let i=0; i<PARTICLE_COUNT; i++) {
+        // Scatter Pos (Full Screen)
+        posScatter[i*3] = (Math.random() - 0.5) * viewWidth * 1.5;
+        posScatter[i*3+1] = (Math.random() - 0.5) * viewHeight * 1.5;
+        posScatter[i*3+2] = (Math.random() - 0.5) * 100;
+        
+        // Size
+        sizes[i] = Math.pow(Math.random(), 3.0) * 4.0 + 0.5;
+        randoms[i] = Math.random();
+    }
+    
+    // 关键：position attribute 将会被动态更新（当切换形状时）
+    geometry.setAttribute('position', new THREE.BufferAttribute(posShape, 3));
+    geometry.setAttribute('scatterPos', new THREE.BufferAttribute(posScatter, 3));
+    geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+    geometry.setAttribute('random', new THREE.BufferAttribute(randoms, 1));
+    
+    material = new THREE.ShaderMaterial({
+        uniforms: {
+            uTime: { value: 0 },
+            uBaseSize: { value: params.baseSize * window.devicePixelRatio },
+            uColorScatter: { value: new THREE.Color(params.colorScatter) },
+            uColorGather: { value: new THREE.Color(params.colorGather) },
+            uHandPos: { value: new THREE.Vector3(0,0,0) },
+            uGesture: { value: 0 }, 
+            uHasHand: { value: 0 }
+        },
+        vertexShader: `
+            uniform float uTime;
+            uniform float uBaseSize;
+            uniform vec3 uColorScatter;
+            uniform vec3 uColorGather;
+            uniform vec3 uHandPos;
+            uniform float uGesture; // -1(Scatter) ... 1(Gather)
+            uniform float uHasHand;
+            
+            attribute vec3 scatterPos;
+            attribute float size;
+            attribute float random;
+            
+            varying vec3 vColor;
+            
+            // Simplex Noise (Standard)
+            vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+            vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+            vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
+            vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+            float snoise(vec3 v) { const vec2 C = vec2(1.0/6.0, 1.0/3.0); const vec4 D = vec4(0.0, 0.5, 1.0, 2.0); vec3 i = floor(v + dot(v, C.yyy)); vec3 x0 = v - i + dot(i, C.xxx); vec3 g = step(x0.yzx, x0.xyz); vec3 l = 1.0 - g; vec3 i1 = min(g.xyz, l.zxy); vec3 i2 = max(g.xyz, l.zxy); vec3 x1 = x0 - i1 + C.xxx; vec3 x2 = x0 - i2 + C.yyy; vec3 x3 = x0 - D.yyy; i = mod289(i); vec4 p = permute(permute(permute(i.z + vec4(0.0, i1.z, i2.z, 1.0)) + i.y + vec4(0.0, i1.y, i2.y, 1.0)) + i.x + vec4(0.0, i1.x, i2.x, 1.0)); float n_ = 0.142857142857; vec3 ns = n_ * D.wyz - D.xzx; vec4 j = p - 49.0 * floor(p * ns.z * ns.z); vec4 x_ = floor(j * ns.z); vec4 y_ = floor(j - 7.0 * x_); vec4 x = x_ * ns.x + ns.yyyy; vec4 y = y_ * ns.x + ns.yyyy; vec4 h = 1.0 - abs(x) - abs(y); vec4 b0 = vec4(x.xy, y.xy); vec4 b1 = vec4(x.zw, y.zw); vec4 s0 = floor(b0) * 2.0 + 1.0; vec4 s1 = floor(b1) * 2.0 + 1.0; vec4 sh = -step(h, vec4(0.0)); vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy; vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww; vec3 p0 = vec3(a0.xy, h.x); vec3 p1 = vec3(a0.zw, h.y); vec3 p2 = vec3(a1.xy, h.z); vec3 p3 = vec3(a1.zw, h.w); vec4 norm = taylorInvSqrt(vec4(dot(p0, p0), dot(p1, p1), dot(p2, p2), dot(p3, p3))); p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w; vec4 m = max(0.6 - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0); m = m * m; return 42.0 * dot(m * m, vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3))); }
+
+            void main() {
+                // position 属性现在存储的是"当前被选中的形状"
+                vec3 posShape = position;
+                vec3 posScatter = scatterPos;
+                
+                // uGesture: -1(Scatter) -> 1(Gather)
+                // 计算 scatterFactor: 1.0 表示完全散开, 0.0 表示完全聚集
+                float scatterFactor = smoothstep(0.5, -0.8, uGesture);
+                
+                vec3 basePos = mix(posShape, posScatter, scatterFactor);
+                vec3 finalPos = basePos;
+                
+                // 颜色变化
+                vec3 col = mix(uColorGather, uColorScatter, scatterFactor);
+                // 加一点随机亮度差异
+                float n = snoise(basePos * 0.02 + uTime);
+                vColor = col + vec3(n * 0.1);
+
+                // --- 交互叠加 ---
+                if (uHasHand > 0.5) {
+                    
+                    // 1. 散开状态跟随
+                    if (uGesture < -0.1) {
+                         // 全屏拖拽感
+                         vec3 offset = uHandPos * 0.6;
+                         // 流体扰动
+                         float flow = snoise(basePos * 0.015 + uTime * 0.3);
+                         finalPos += offset + vec3(flow * 10.0);
+                    }
+                    
+                    // 2. 聚拢状态吸附
+                    else if (uGesture > 0.1) {
+                        float gatherPower = uGesture; 
+                        // 将形状中心移动到手上
+                        vec3 targetCenter = uHandPos;
+                        
+                        // 从原始形状中心(0,0,0)偏移到手
+                        vec3 shapeMove = targetCenter * gatherPower;
+                        
+                        // 震动能量感
+                        float shake = snoise(basePos*0.1 + uTime*15.0) * (1.0-gatherPower) * 5.0;
+                        
+                        finalPos += shapeMove + vec3(shake);
+                    }
+                } else {
+                    // 待机自转
+                    if(abs(uGesture) < 0.2) {
+                        float t = uTime * 0.2;
+                        float s = sin(t); float c = cos(t);
+                        float x = finalPos.x*c - finalPos.z*s;
+                        float z = finalPos.x*s + finalPos.z*c;
+                        finalPos.x = x; finalPos.z = z;
+                    }
+                }
+
+                vec4 mvPosition = modelViewMatrix * vec4(finalPos, 1.0);
+                gl_PointSize = uBaseSize * size * (50.0 / -mvPosition.z);
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `,
+        fragmentShader: `
+            varying vec3 vColor;
+            void main() {
+                vec2 center = gl_PointCoord - 0.5;
+                float dist = length(center);
+                float alpha = 1.0 - smoothstep(0.1, 0.5, dist);
+                if (alpha < 0.01) discard;
+                gl_FragColor = vec4(vColor, alpha);
+            }
+        `,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+    });
+    
+    points = new THREE.Points(geometry, material);
+    scene.add(points);
+}
+
+// --- 6. 形状切换逻辑 ---
+function triggerRandomShape() {
+    // 随机选择一个不同于当前的形状
+    let nextIndex = state.currentShapeIndex;
+    while(nextIndex === state.currentShapeIndex) {
+        nextIndex = Math.floor(Math.random() * shapeNames.length);
+    }
+    setShape(shapeNames[nextIndex]);
+}
+
+function setShape(name) {
+    const idx = shapeNames.indexOf(name);
+    if(idx === -1) return;
+    
+    state.currentShapeIndex = idx;
+    params.currentShape = name;
+    
+    // UI文字更新
+    const title = document.getElementById('current-shape');
+    title.style.opacity = 0;
+    setTimeout(() => {
+        title.innerText = name;
+        title.style.opacity = 1;
+    }, 250);
+    
+    // 核心：更新 Buffer
+    // 我们不需要像之前那样在 Shader 里做 morphing，因为这个切换发生在握拳的瞬间
+    // 或者在散开的时候切换。这里直接替换 buffer 即可。
+    geometry.attributes.position.array.set(shapesLibrary[name]);
+    geometry.attributes.position.needsUpdate = true;
+}
+
+// --- 7. UI 面板 ---
+function initUI() {
+    const gui = new GUI({ title: 'MAGIC CONTROL' });
+    
+    // 形状选择
+    gui.add(params, 'currentShape', shapeNames).name('Manual Shape').onChange(val => {
+        setShape(val);
+    });
+    
+    gui.add(params, 'autoChange').name('Auto Change on Grip');
+    
+    const fColor = gui.addFolder('Colors');
+    fColor.addColor(params, 'colorScatter').name('Scatter Color').onChange(v => material.uniforms.uColorScatter.value.set(v));
+    fColor.addColor(params, 'colorGather').name('Gather Color').onChange(v => material.uniforms.uColorGather.value.set(v));
+    
+    gui.add(params, 'baseSize', 0.5, 4.0).name('Particle Size');
+    gui.add(params, 'bloomStrength', 0, 3.0).name('Glow');
+}
+
+// --- 8. 动画 ---
+function animate() {
+    requestAnimationFrame(animate);
+    const elapsed = clock.getElapsedTime();
+    
+    // 平滑手势
+    state.smoothGesture += (state.gestureVal - state.smoothGesture) * 0.1;
+    
+    material.uniforms.uTime.value = elapsed;
+    material.uniforms.uGesture.value = state.smoothGesture;
+    material.uniforms.uHasHand.value = state.hasHand ? 1.0 : 0.0;
+    
+    if(state.hasHand) {
+        material.uniforms.uHandPos.value.lerp(state.handPos, 0.2);
+    } else {
+        material.uniforms.uHandPos.value.lerp(new THREE.Vector3(0,0,0), 0.1);
+    }
+    
+    composer.render();
+}
+
+init();
+
+</script>
+</body>
+</html>

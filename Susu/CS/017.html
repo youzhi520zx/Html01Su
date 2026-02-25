@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Cosmic Big Bang Control</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', sans-serif; }
+        
+        #video-input {
+            position: absolute;
+            width: 1px; height: 1px;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: #00ffff;
+            font-size: 1.5rem;
+            text-transform: uppercase;
+            letter-spacing: 5px;
+            text-shadow: 0 0 15px #00ffff;
+            pointer-events: none;
+            transition: opacity 1s;
+        }
+
+        /* 状态指示器 */
+        #gesture-indicator {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 20px;
+            pointer-events: none;
+        }
+        
+        .indicator {
+            background: rgba(0,0,0,0.6);
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 12px 24px;
+            border-radius: 30px;
+            color: rgba(255,255,255,0.4);
+            font-size: 1rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            backdrop-filter: blur(5px);
+        }
+        
+        .indicator span { font-size: 1.4rem; }
+        
+        .indicator.active {
+            color: #fff;
+            border-color: #fff;
+            transform: scale(1.15) translateY(-5px);
+        }
+
+        /* 不同的激活颜色 */
+        #ind-grab.active { 
+            border-color: #ff0055; 
+            color: #ff0055; 
+            box-shadow: 0 0 25px rgba(255, 0, 85, 0.6); 
+            background: rgba(20, 0, 5, 0.8);
+        }
+        #ind-open.active { 
+            border-color: #00ffff; 
+            color: #00ffff; 
+            box-shadow: 0 0 30px rgba(0, 255, 255, 0.6); 
+            background: rgba(0, 20, 25, 0.8);
+        }
+
+    </style>
+</head>
+<body>
+
+<video id="video-input" autoplay playsinline></video>
+
+<div id="loading">Initializing Physics Engine...</div>
+
+<div id="gesture-indicator">
+    <div id="ind-open" class="indicator"><span>🖐️</span> EXPLODE (Full Screen)</div>
+    <div id="ind-grab" class="indicator"><span>✊</span> BLACK HOLE (Attract)</div>
+</div>
+
+<script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+      "lil-gui": "https://unpkg.com/lil-gui@0.18.0/dist/lil-gui.esm.min.js",
+      "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/+esm"
+    }
+  }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { GUI } from 'lil-gui';
+import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
+
+// --- 配置参数 ---
+const PARTICLE_COUNT = 80000;
+const CAM_Z = 120;
+
+const params = {
+    shape: 'Chaos Vortex',
+    color1: '#00ccff',
+    color2: '#ff0066',
+    particleSize: 1.8,
+    bloomStrength: 2.0, // 增强辉光以配合爆炸效果
+    bloomRadius: 0.6,
+    physicsForce: 1.0,
+    rotationSpeed: 0.2
+};
+
+// --- 全局变量 ---
+let scene, camera, renderer, composer;
+let geometry, material, points;
+let handLandmarker, videoElement;
+let clock = new THREE.Clock();
+let bloomPass;
+
+// 状态管理
+const state = {
+    shapes: [],
+    currentShapeIdx: 0,
+    targetShapeIdx: 0,
+    mixRatio: 0,
+    isTransitioning: false,
+    
+    // 手势状态
+    hasHand: false,
+    handPos: new THREE.Vector3(999,999,999),
+    grabValue: 0, // 0(Open) -> 1(Fist)
+    smoothGrab: 0 // 平滑值
+};
+
+const shapeLibrary = {
+    'Chaos Vortex': 0,
+    'Klein Bottle': 1,
+    'Mobius Strip': 2,
+    'Fermat Spiral': 3,
+    'Torus Knot': 4,
+    'Sphere Cloud': 5
+};
+
+// --- 1. 初始化 ---
+async function init() {
+    videoElement = document.getElementById("video-input");
+    await initVision();
+    initThree();
+    initUI();
+    document.getElementById('loading').style.opacity = 0;
+    animate();
+}
+
+// --- 2. 视觉模型 (MediaPipe) ---
+async function initVision() {
+    const vision = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+    );
+    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: {
+            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+            delegate: "GPU"
+        },
+        runningMode: "VIDEO",
+        numHands: 1
+    });
+    
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: "user" } });
+    videoElement.srcObject = stream;
+    
+    const predictLoop = async () => {
+        if (videoElement.currentTime > 0 && !videoElement.paused) {
+             const results = await handLandmarker.detectForVideo(videoElement, performance.now());
+             processHandData(results);
+        }
+        requestAnimationFrame(predictLoop);
+    };
+    videoElement.addEventListener("loadeddata", predictLoop);
+}
+
+// --- 手势处理 ---
+function processHandData(results) {
+    const indGrab = document.getElementById('ind-grab');
+    const indOpen = document.getElementById('ind-open');
+
+    if (results.landmarks && results.landmarks.length > 0) {
+        state.hasHand = true;
+        const lm = results.landmarks[0];
+        
+        // 映射手掌中心
+        const x = (1.0 - lm[9].x) * 2 - 1; 
+        const y = -(lm[9].y * 2 - 1);
+        const vFOV = THREE.MathUtils.degToRad(60);
+        const height = 2 * Math.tan(vFOV / 2) * CAM_Z;
+        const width = height * (window.innerWidth / window.innerHeight);
+        state.handPos.set(x * width / 2, y * height / 2, 0);
+        
+        // 握拳检测
+        const wrist = lm[0];
+        const distSq = (p1, p2) => (p1.x - p2.x)**2 + (p1.y - p2.y)**2 + (p1.z - p2.z)**2;
+        
+        let curledCount = 0;
+        if (distSq(lm[8], wrist) < distSq(lm[5], wrist)) curledCount++; // Index
+        if (distSq(lm[12], wrist) < distSq(lm[9], wrist)) curledCount++; // Middle
+        if (distSq(lm[16], wrist) < distSq(lm[13], wrist)) curledCount++; // Ring
+        if (distSq(lm[20], wrist) < distSq(lm[17], wrist)) curledCount++; // Pinky
+
+        const isGrabbing = curledCount >= 3;
+        state.grabValue = isGrabbing ? 1 : 0;
+        
+        // 更新UI
+        if(isGrabbing) {
+            indGrab.classList.add('active');
+            indOpen.classList.remove('active');
+        } else {
+            indOpen.classList.add('active');
+            indGrab.classList.remove('active');
+        }
+        
+    } else {
+        state.hasHand = false;
+        state.grabValue = 0;
+        indGrab.classList.remove('active');
+        indOpen.classList.remove('active');
+    }
+}
+
+// --- 3. Three.js ---
+function initThree() {
+    scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x000000, 0.002);
+    
+    camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1000);
+    camera.position.z = CAM_Z;
+    
+    renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+    
+    const renderScene = new RenderPass(scene, camera);
+    bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+    bloomPass.threshold = 0.1;
+    bloomPass.strength = params.bloomStrength;
+    bloomPass.radius = params.bloomRadius;
+    composer = new EffectComposer(renderer);
+    composer.addPass(renderScene);
+    composer.addPass(bloomPass);
+    
+    generateGeometries();
+    createParticles();
+    
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        composer.setSize(window.innerWidth, window.innerHeight);
+    });
+}
+
+// --- 4. 几何体生成 ---
+function generateGeometries() {
+    const make = (fn) => {
+        const arr = new Float32Array(PARTICLE_COUNT * 3);
+        for(let i=0; i<PARTICLE_COUNT; i++) {
+            const p = fn(i, PARTICLE_COUNT);
+            arr[i*3] = p.x; arr[i*3+1] = p.y; arr[i*3+2] = p.z;
+        }
+        state.shapes.push(arr);
+    }
+    // Chaos
+    make((i, n) => { const r=(i/n)*40; const t=i*0.1; return {x:r*Math.cos(t), y:(Math.random()-0.5)*60, z:r*Math.sin(t)}; });
+    // Klein
+    make((i, n) => { const u=(i/n)*Math.PI*2; const v=(i%100)/100*Math.PI*2; const r=4*(1-Math.cos(u)/2); let x,y,z; if(u<Math.PI){x=6*Math.cos(u)*(1+Math.sin(u))+r*Math.cos(u)*Math.cos(v); y=16*Math.sin(u)+r*Math.sin(u)*Math.cos(v);}else{x=6*Math.cos(u)*(1+Math.sin(u))+r*Math.cos(v+Math.PI); y=16*Math.sin(u);} return {x:x*1.2, y:y*1.2, z:r*Math.sin(v)*1.2}; });
+    // Mobius
+    make((i, n) => { const t=(i/n)*Math.PI*2; const w=(i%200)/200*10-5; return {x:(30+w*Math.cos(t/2))*Math.cos(t), y:(30+w*Math.cos(t/2))*Math.sin(t), z:w*Math.sin(t/2)}; });
+    // Fermat
+    make((i, n) => { const phi=Math.acos(-1+(2*i)/n); const theta=Math.sqrt(n*Math.PI)*phi; const r=40; return {x:r*Math.sin(phi)*Math.cos(theta), y:r*Math.sin(phi)*Math.sin(theta), z:r*Math.cos(phi)}; });
+    // Torus Knot
+    make((i, n) => { const t=(i/n)*Math.PI*2*3; const p=2,q=3; const r=20*(2+Math.cos(q*t)); return {x:r*Math.cos(p*t), y:r*Math.sin(p*t), z:20*Math.sin(q*t)}; });
+    // Sphere Cloud
+    make((i, n) => { const u=Math.random(); const v=Math.random(); const theta=2*Math.PI*u; const phi=Math.acos(2*v-1); const r=35+Math.random()*5; return {x:r*Math.sin(phi)*Math.cos(theta), y:r*Math.sin(phi)*Math.sin(theta), z:r*Math.cos(phi)}; });
+}
+
+function createParticles() {
+    geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(state.shapes[0]), 3));
+    geometry.setAttribute('targetPosition', new THREE.BufferAttribute(new Float32Array(state.shapes[0]), 3));
+    const randomness = new Float32Array(PARTICLE_COUNT);
+    for(let i=0; i<PARTICLE_COUNT; i++) randomness[i] = Math.random();
+    geometry.setAttribute('random', new THREE.BufferAttribute(randomness, 1));
+    
+    material = new THREE.ShaderMaterial({
+        uniforms: {
+            uTime: { value: 0 },
+            uMix: { value: 0 },
+            uSize: { value: params.particleSize * window.devicePixelRatio },
+            uColor1: { value: new THREE.Color(params.color1) },
+            uColor2: { value: new THREE.Color(params.color2) },
+            uHandPos: { value: new THREE.Vector3(0,0,0) },
+            uGrabFactor: { value: 0 }, 
+            uHasHand: { value: 0 },
+            uForceMult: { value: params.physicsForce }
+        },
+        vertexShader: `
+            uniform float uTime;
+            uniform float uMix;
+            uniform float uSize;
+            uniform vec3 uColor1;
+            uniform vec3 uColor2;
+            uniform vec3 uHandPos;
+            uniform float uGrabFactor; 
+            uniform float uHasHand;
+            uniform float uForceMult;
+            
+            attribute vec3 targetPosition;
+            attribute float random;
+            varying vec3 vColor;
+            
+            // Simplex Noise
+            vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+            vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+            vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
+            vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+            float snoise(vec3 v) { const vec2 C = vec2(1.0/6.0, 1.0/3.0); const vec4 D = vec4(0.0, 0.5, 1.0, 2.0); vec3 i = floor(v + dot(v, C.yyy)); vec3 x0 = v - i + dot(i, C.xxx); vec3 g = step(x0.yzx, x0.xyz); vec3 l = 1.0 - g; vec3 i1 = min(g.xyz, l.zxy); vec3 i2 = max(g.xyz, l.zxy); vec3 x1 = x0 - i1 + C.xxx; vec3 x2 = x0 - i2 + C.yyy; vec3 x3 = x0 - D.yyy; i = mod289(i); vec4 p = permute(permute(permute(i.z + vec4(0.0, i1.z, i2.z, 1.0)) + i.y + vec4(0.0, i1.y, i2.y, 1.0)) + i.x + vec4(0.0, i1.x, i2.x, 1.0)); float n_ = 0.142857142857; vec3 ns = n_ * D.wyz - D.xzx; vec4 j = p - 49.0 * floor(p * ns.z * ns.z); vec4 x_ = floor(j * ns.z); vec4 y_ = floor(j - 7.0 * x_); vec4 x = x_ * ns.x + ns.yyyy; vec4 y = y_ * ns.x + ns.yyyy; vec4 h = 1.0 - abs(x) - abs(y); vec4 b0 = vec4(x.xy, y.xy); vec4 b1 = vec4(x.zw, y.zw); vec4 s0 = floor(b0) * 2.0 + 1.0; vec4 s1 = floor(b1) * 2.0 + 1.0; vec4 sh = -step(h, vec4(0.0)); vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy; vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww; vec3 p0 = vec3(a0.xy, h.x); vec3 p1 = vec3(a0.zw, h.y); vec3 p2 = vec3(a1.xy, h.z); vec3 p3 = vec3(a1.zw, h.w); vec4 norm = taylorInvSqrt(vec4(dot(p0, p0), dot(p1, p1), dot(p2, p2), dot(p3, p3))); p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w; vec4 m = max(0.6 - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0); m = m * m; return 42.0 * dot(m * m, vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3))); }
+
+            void main() {
+                float colorMix = smoothstep(-30.0, 30.0, position.y + random * 20.0);
+                vColor = mix(uColor1, uColor2, colorMix);
+                
+                // 基础形状位置
+                float t = uMix < 0.5 ? 4.0 * uMix * uMix * uMix : 1.0 - pow(-2.0 * uMix + 2.0, 3.0) / 2.0;
+                vec3 pos = mix(position, targetPosition, t);
+                
+                // --- 物理核心 ---
+                if (uHasHand > 0.5) {
+                    float d = distance(pos, uHandPos);
+                    
+                    // 动态半径逻辑：
+                    // uGrabFactor 接近 0 (Open) -> 半径 400.0 (全屏)
+                    // uGrabFactor 接近 1 (Fist) -> 半径 60.0 (局部)
+                    float interactionRadius = mix(400.0, 60.0, uGrabFactor);
+                    
+                    if (d < interactionRadius) {
+                        // 力度衰减 (距离越近力越大)
+                        float strength = (interactionRadius - d) / interactionRadius;
+                        strength = pow(strength, 2.0); 
+                        
+                        vec3 dir = normalize(pos - uHandPos);
+                        
+                        // 动态力度逻辑：
+                        // Open (0) -> +180.0 (极强斥力/爆炸)
+                        // Fist (1) -> -80.0 (强引力/黑洞)
+                        float force = mix(180.0, -80.0, uGrabFactor) * uForceMult;
+                        
+                        // 应用力
+                        pos += dir * strength * force;
+                        
+                        // 湍流噪声 (爆炸时增加混乱度)
+                        float noiseAmp = mix(15.0, 5.0, uGrabFactor);
+                        float noise = snoise(pos * 0.05 + uTime * 3.0);
+                        pos += noise * strength * noiseAmp;
+                        
+                        // 交互时增加亮度
+                        vColor += vec3(strength * 0.8);
+                    }
+                }
+                
+                // 待机呼吸
+                float breath = sin(uTime * 1.5 + pos.x * 0.05) * 0.3;
+                pos += normalize(pos) * breath;
+
+                vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                gl_PointSize = uSize * (60.0 / -mvPosition.z);
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `,
+        fragmentShader: `
+            varying vec3 vColor;
+            void main() {
+                vec2 center = gl_PointCoord - 0.5;
+                float d = length(center);
+                if (d > 0.5) discard;
+                float alpha = 1.0 - smoothstep(0.1, 0.5, d);
+                gl_FragColor = vec4(vColor, alpha);
+            }
+        `,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+    });
+    points = new THREE.Points(geometry, material);
+    scene.add(points);
+}
+
+// --- 5. UI ---
+function initUI() {
+    const gui = new GUI({ title: 'COSMIC CONTROL' });
+    gui.add(params, 'shape', Object.keys(shapeLibrary)).name('Select Shape').onChange(val => triggerShapeTransition(shapeLibrary[val]));
+    const folderColor = gui.addFolder('Atmosphere');
+    folderColor.addColor(params, 'color1').name('Core Color').onChange(v => material.uniforms.uColor1.value.set(v));
+    folderColor.addColor(params, 'color2').name('Outer Color').onChange(v => material.uniforms.uColor2.value.set(v));
+    folderColor.add(params, 'bloomStrength', 0, 4).name('Glow Intensity').onChange(v => bloomPass.strength = v);
+    const folderPhys = gui.addFolder('Physics');
+    folderPhys.add(params, 'physicsForce', 0.1, 3.0).name('Hand Power');
+    folderPhys.add(params, 'rotationSpeed', 0, 1.0).name('Auto Rotation');
+}
+
+function triggerShapeTransition(nextIdx) {
+    if (state.currentShapeIdx === nextIdx) return;
+    state.targetShapeIdx = nextIdx;
+    geometry.attributes.targetPosition.array.set(state.shapes[nextIdx]);
+    geometry.attributes.targetPosition.needsUpdate = true;
+    state.isTransitioning = true;
+    state.mixRatio = 0;
+}
+
+// --- 6. 动画 ---
+function animate() {
+    requestAnimationFrame(animate);
+    const delta = clock.getDelta();
+    const elapsed = clock.getElapsedTime();
+    points.rotation.y += 0.005 * params.rotationSpeed;
+    
+    // 平滑手势数据
+    state.smoothGrab += (state.grabValue - state.smoothGrab) * 0.15;
+    
+    material.uniforms.uTime.value = elapsed;
+    material.uniforms.uHandPos.value.lerp(state.handPos, 0.2);
+    material.uniforms.uHasHand.value = state.hasHand ? 1.0 : 0.0;
+    material.uniforms.uGrabFactor.value = state.smoothGrab;
+    material.uniforms.uForceMult.value = params.physicsForce;
+    
+    if (state.isTransitioning) {
+        state.mixRatio += delta * 0.5;
+        if (state.mixRatio >= 1.0) {
+            state.mixRatio = 0;
+            state.isTransitioning = false;
+            geometry.attributes.position.array.set(state.shapes[state.targetShapeIdx]);
+            geometry.attributes.position.needsUpdate = true;
+            state.currentShapeIdx = state.targetShapeIdx;
+        }
+        material.uniforms.uMix.value = state.mixRatio;
+    }
+    composer.render();
+}
+
+init();
+
+</script>
+</body>
+</html>

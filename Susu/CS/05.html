@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <title>Cosmic Math Vortex - 交互升级版</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; touch-action: none; /* 防止手机端滚动 */ }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 20px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.8);
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 14px;
+            pointer-events: none;
+            z-index: 10;
+            text-shadow: 0 0 10px #00ffff;
+        }
+        #current-shape {
+            font-size: 24px;
+            font-weight: bold;
+            margin-top: 10px;
+            text-shadow: 0 0 20px #ff00de;
+        }
+        #interaction-hint {
+            font-size: 12px;
+            margin-top: 5px;
+            opacity: 0.7;
+            color: #ffff00;
+        }
+        #music-control {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: white;
+            z-index: 20;
+            font-family: sans-serif;
+            cursor: pointer;
+            border: 1px solid white;
+            padding: 10px;
+            background: rgba(0,0,0,0.5);
+            user-select: none;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+<div id="info">
+    <div>COSMIC MATH VORTEX</div>
+    <div id="current-shape">Chaos (Initial)</div>
+    <div id="interaction-hint">👆 拖拽旋转 | 🖱️ 移动鼠标/手指以此扰动星尘</div>
+</div>
+
+<div id="music-control" onclick="toggleAudio()">🎵 播放/暂停 氛围音乐</div>
+
+<audio id="bgm" loop>
+    <source src="https://cdn.pixabay.com/download/audio/2022/03/10/audio_c8c8a73467.mp3?filename=cosmic-glow-14282.mp3" type="audio/mp3">
+</audio>
+
+<script>
+    // --- 1. 初始化场景 ---
+    const scene = new THREE.Scene();
+    // 增加更浓的迷雾，增强深空感
+    scene.fog = new THREE.FogExp2(0x000000, 0.0008); 
+
+    const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 1, 20000);
+    camera.position.z = 1200;
+    camera.position.y = 300;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.autoRotate = true; 
+    controls.autoRotateSpeed = 0.8; // 稍微加快一点旋转速度
+
+    // --- 2. 交互系统核心变量 ---
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2(9999, 9999); // 初始位置在屏幕外
+    const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0); // 用于计算鼠标3D深度的虚拟平面
+    const planeNormal = new THREE.Vector3();
+    const interactionTarget = new THREE.Vector3(); // 鼠标在3D空间的位置
+
+    // 监听鼠标/触摸移动
+    function onPointerMove(event) {
+        event.preventDefault(); // 防止触摸滚动
+        
+        let clientX, clientY;
+        if (event.changedTouches) {
+            clientX = event.changedTouches[0].clientX;
+            clientY = event.changedTouches[0].clientY;
+        } else {
+            clientX = event.clientX;
+            clientY = event.clientY;
+        }
+
+        mouse.x = (clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(clientY / window.innerHeight) * 2 + 1;
+    }
+
+    window.addEventListener('mousemove', onPointerMove);
+    window.addEventListener('touchmove', onPointerMove, { passive: false });
+    window.addEventListener('touchstart', onPointerMove, { passive: false });
+
+
+    // --- 3. 创建粒子系统 ---
+    const particleCount = 28000; // 稍微增加粒子数
+    const geometry = new THREE.BufferGeometry();
+    
+    const positions = new Float32Array(particleCount * 3);
+    const targetPositions = new Float32Array(particleCount * 3);
+    const colors = new Float32Array(particleCount * 3);
+    const colorObj = new THREE.Color();
+
+    // 初始化：混沌状态
+    for (let i = 0; i < particleCount; i++) {
+        const x = (Math.random() - 0.5) * 2500;
+        const y = (Math.random() - 0.5) * 2500;
+        const z = (Math.random() - 0.5) * 2500;
+
+        positions[i * 3] = x;
+        positions[i * 3 + 1] = y;
+        positions[i * 3 + 2] = z;
+
+        targetPositions[i * 3] = x;
+        targetPositions[i * 3 + 1] = y;
+        targetPositions[i * 3 + 2] = z;
+
+        colorObj.setHSL(Math.random(), 0.8, 0.5);
+        colors[i * 3] = colorObj.r;
+        colors[i * 3 + 1] = colorObj.g;
+        colors[i * 3 + 2] = colorObj.b;
+    }
+
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+    // 生成发光辉点贴图 (更高质量)
+    function getTexture() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64; 
+        canvas.height = 64;
+        const context = canvas.getContext('2d');
+        const gradient = context.createRadialGradient(32, 32, 0, 32, 32, 32);
+        gradient.addColorStop(0, 'rgba(255,255,255,1)');
+        gradient.addColorStop(0.2, 'rgba(200,240,255,0.8)');
+        gradient.addColorStop(0.5, 'rgba(60,150,255,0.3)');
+        gradient.addColorStop(1, 'rgba(0,0,0,0)');
+        context.fillStyle = gradient;
+        context.fillRect(0, 0, 64, 64);
+        const texture = new THREE.Texture(canvas);
+        texture.needsUpdate = true;
+        return texture;
+    }
+
+    const material = new THREE.PointsMaterial({
+        size: 10,
+        map: getTexture(),
+        vertexColors: true,
+        blending: THREE.AdditiveBlending, // 加法混合创造辉光
+        depthWrite: false,
+        transparent: true,
+        opacity: 0.9
+    });
+
+    const particles = new THREE.Points(geometry, material);
+    scene.add(particles);
+
+    // --- 4. 数学形态生成器 ---
+    function getShapePos(shapeType, i) {
+        const t = (i / particleCount) * Math.PI * 2 * 10;
+        
+        let x = 0, y = 0, z = 0;
+
+        switch (shapeType) {
+            case 'Sphere (Chaos)':
+                const r = 800 * Math.random();
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos((Math.random() * 2) - 1);
+                x = r * Math.sin(phi) * Math.cos(theta);
+                y = r * Math.sin(phi) * Math.sin(theta);
+                z = r * Math.cos(phi);
+                break;
+
+            case 'Galaxy Spiral': // 银河螺旋
+                const arms = 5;
+                const spin = i * 0.005;
+                const dist = i * 0.03;
+                const armOffset = (i % arms) * (Math.PI * 2 / arms);
+                x = dist * Math.cos(spin + armOffset) * 10;
+                z = dist * Math.sin(spin + armOffset) * 10;
+                y = (Math.random() - 0.5) * Math.sqrt(dist) * 20; 
+                break;
+
+            case 'Mobius Strip': // 莫比乌斯环
+                const u = (i / particleCount) * Math.PI * 2; // 0 to 2PI
+                const v = (i % 200 / 200) * 2 - 1; // -1 to 1 width
+                const radiusM = 400;
+                x = (radiusM + v * 100 * Math.cos(u/2)) * Math.cos(u);
+                y = (radiusM + v * 100 * Math.cos(u/2)) * Math.sin(u);
+                z = v * 100 * Math.sin(u/2);
+                break;
+
+            case 'Heart Surface': // 更立体的爱心
+                 const p1 = (i / particleCount) * Math.PI;
+                 const p2 = (i % 100 / 100) * Math.PI * 2;
+                 x = 10 * 16 * Math.pow(Math.sin(p1), 3) * Math.cos(p2);
+                 z = 10 * 16 * Math.pow(Math.sin(p1), 3) * Math.sin(p2);
+                 y = 10 * (13 * Math.cos(p1) - 5 * Math.cos(2*p1) - 2 * Math.cos(3*p1) - Math.cos(4*p1));
+                 // 旋转爱心使其直立
+                 const tempY = y; y = z; z = tempY; 
+                 break;
+
+            case 'Lissajous Knot': // 复杂的李萨如结
+                const s = i * 0.05;
+                x = 300 * Math.sin(s * 3 + Math.PI/2);
+                y = 300 * Math.sin(s * 4);
+                z = 300 * Math.sin(s * 7);
+                break;
+                
+            default: // 阿基米德螺旋
+                const rt = i * 0.05; 
+                const angle = i * 0.01;
+                x = rt * Math.cos(angle);
+                z = rt * Math.sin(angle);
+                y = (i - particleCount/2) * 0.1;
+                break;
+        }
+        return {x, y, z};
+    }
+
+    const shapes = ['Sphere (Chaos)', 'Galaxy Spiral', 'Heart Surface', 'Mobius Strip', 'Lissajous Knot'];
+    let currentShapeIndex = 0;
+    
+    function morphToNextShape() {
+        currentShapeIndex = (currentShapeIndex + 1) % shapes.length;
+        const shapeName = shapes[currentShapeIndex];
+        
+        const el = document.getElementById('current-shape');
+        el.innerText = shapeName;
+        // 随机霓虹色
+        el.style.color = `hsl(${Math.random() * 360}, 100%, 75%)`;
+        el.style.textShadow = `0 0 20px ${el.style.color}`;
+
+        for (let i = 0; i < particleCount; i++) {
+            const pos = getShapePos(shapeName, i);
+            targetPositions[i * 3] = pos.x;
+            targetPositions[i * 3 + 1] = pos.y;
+            targetPositions[i * 3 + 2] = pos.z;
+        }
+    }
+
+    setInterval(morphToNextShape, 6000);
+
+    // --- 5. 动画循环 (含物理引擎) ---
+    const clock = new THREE.Clock();
+    
+    function animate() {
+        requestAnimationFrame(animate);
+        
+        const time = Date.now() * 0.0005;
+        const delta = clock.getDelta();
+
+        // 1. 计算鼠标在3D空间的位置 (Interaction Point)
+        // 我们假设交互发生在一个总是面向摄像机的平面上，平面穿过场景中心
+        planeNormal.copy(camera.position).normalize();
+        plane.normal.copy(planeNormal);
+        raycaster.setFromCamera(mouse, camera);
+        raycaster.ray.intersectPlane(plane, interactionTarget);
+
+        const positionsAttribute = geometry.attributes.position;
+        const colorsAttribute = geometry.attributes.color;
+
+        for (let i = 0; i < particleCount; i++) {
+            // 获取当前坐标
+            let px = positionsAttribute.array[i * 3];
+            let py = positionsAttribute.array[i * 3 + 1];
+            let pz = positionsAttribute.array[i * 3 + 2];
+
+            // 获取目标坐标
+            const tx = targetPositions[i * 3];
+            const ty = targetPositions[i * 3 + 1];
+            const tz = targetPositions[i * 3 + 2];
+
+            // --- A. 形态变换力 (Spring Force) ---
+            // 粒子总是试图回到数学目标点
+            // vx, vy, vz 是速度分量
+            let vx = (tx - px) * 0.035; // 0.035 是回归弹性系数
+            let vy = (ty - py) * 0.035;
+            let vz = (tz - pz) * 0.035;
+
+            // --- B. 鼠标斥力 (Repulsion Force) ---
+            if (mouse.x !== 9999) { // 只有鼠标在屏幕内才计算
+                const dx = px - interactionTarget.x;
+                const dy = py - interactionTarget.y;
+                const dz = pz - interactionTarget.z;
+
+                const distSq = dx*dx + dy*dy + dz*dz;
+                const radius = 350; // 交互半径
+                const radiusSq = radius * radius;
+
+                if (distSq < radiusSq) {
+                    const dist = Math.sqrt(distSq);
+                    // 力的大小与距离成反比：越近推力越大
+                    const force = (radius - dist) / radius; 
+                    const repulsionStrength = 30.0; // 斥力强度
+
+                    vx += (dx / dist) * force * repulsionStrength;
+                    vy += (dy / dist) * force * repulsionStrength;
+                    vz += (dz / dist) * force * repulsionStrength;
+                }
+            }
+
+            // --- C. 更新位置 ---
+            positionsAttribute.array[i * 3] += vx;
+            positionsAttribute.array[i * 3 + 1] += vy;
+            positionsAttribute.array[i * 3 + 2] += vz;
+
+            // --- D. 颜色流转 ---
+            // 根据距离中心的远近和时间改变颜色
+            const distFromCenter = Math.sqrt(px*px + py*py + pz*pz);
+            const h = (time * 0.15 + distFromCenter * 0.0005) % 1; 
+            const s = 0.8;
+            const l = 0.6;
+            
+            colorObj.setHSL(h, s, l);
+            colorsAttribute.array[i * 3] = colorObj.r;
+            colorsAttribute.array[i * 3 + 1] = colorObj.g;
+            colorsAttribute.array[i * 3 + 2] = colorObj.b;
+        }
+
+        positionsAttribute.needsUpdate = true;
+        colorsAttribute.needsUpdate = true;
+
+        // 整体慢速旋转
+        particles.rotation.y = time * 0.1;
+        
+        controls.update();
+        renderer.render(scene, camera);
+    }
+
+    // 窗口调整
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    animate();
+
+    function toggleAudio() {
+        const audio = document.getElementById('bgm');
+        audio.paused ? audio.play() : audio.pause();
+    }
+</script>
+</body>
+</html>

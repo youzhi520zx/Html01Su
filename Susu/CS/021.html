@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Gesture Controlled Cosmic System</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 20px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.8);
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 14px;
+            pointer-events: none;
+            z-index: 10;
+            text-shadow: 0 0 10px #00ffff;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
+            padding-bottom: 20px;
+        }
+        #tip { font-size: 12px; color: #ff00ff; margin-top: 5px; opacity: 0.8; }
+        #status { font-weight: bold; color: #ffff00; }
+        /* 隐藏视频元素 */
+        .input_video { display: none; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <div id="info">
+        状态: <span id="status">正在初始化摄像头与AI模型...</span><br>
+        正在演算: <span id="shape-name">宇宙混沌 (Cosmic Chaos)</span>
+        <div id="tip">交互指南: <br>1. 移动食指扰动星尘 <br>2. 拇指与食指【捏合】切换形状</div>
+    </div>
+
+    <video class="input_video"></video>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // --- 配置参数 ---
+        const PARTICLE_COUNT = 30000; // 稍微降低粒子数以平衡AI计算压力
+        const PARTICLE_SIZE = 0.25;
+        const MORPH_SPEED = 0.04;
+        const HAND_FORCE = 180;       // 手势斥力强度
+        const HAND_RADIUS = 45;       // 手势影响半径
+        const PINCH_THRESHOLD = 0.06; // 捏合触发阈值 (0.0-1.0之间)
+
+        // --- Three.js 全局变量 ---
+        let scene, camera, renderer, composer;
+        let particles, geometry;
+        let positions, targetPositions;
+        let currentShape = 0;
+        
+        // --- 交互相关变量 ---
+        const raycaster = new THREE.Raycaster();
+        // 用于标准化的手部屏幕坐标 (-1 到 +1)
+        const handScreenCoords = new THREE.Vector2(999, 999); 
+        // 转换后的 3D 世界坐标
+        const handWorldPos = new THREE.Vector3(9999, 9999, 9999);
+        let planeMesh; // 隐形捕捉平面
+
+        // 手势状态定义
+        let isHandDetected = false;
+        let isPinching = false;
+        let wasPinching = false; // 用于检测捏合动作的瞬间触发
+
+        // 形状列表
+        const shapes = [
+            { name: "宇宙漩涡 (Galaxy)", func: getGalaxyShape },
+            { name: "蝴蝶吸引子 (Butterfly)", func: getButterfly },
+            { name: "阿基米德螺旋 (Spiral)", func: getArchimedeanSpiral },
+            { name: "克莱因瓶结构 (Klein)", func: getKleinFigure },
+            { name: "伯努利双扭线 (Infinity)", func: getLemniscate },
+            { name: "玫瑰花球 (Rose Sphere)", func: getRoseCurve },
+            { name: "分形星云 (Nebula)", func: getSphereVolume }
+        ];
+
+        // =================================================================
+        // 1. MediaPipe Hands 初始化部分
+        // =================================================================
+        const videoElement = document.getElementsByClassName('input_video')[0];
+        const statusElement = document.getElementById('status');
+
+        function onHandResults(results) {
+            isHandDetected = results.multiHandLandmarks && results.multiHandLandmarks.length > 0;
+
+            if (isHandDetected) {
+                // 只取第一只手
+                const landmarks = results.multiHandLandmarks[0];
+
+                // --- A. 获取食指指尖位置用于交互扰动 (Landmark 8) ---
+                const indexFingerTip = landmarks[8];
+                // MediaPipe 输出的是 0.0-1.0 的坐标，Y轴向下。
+                // 转换为 Three.js 需要的 -1.0 到 +1.0 的屏幕空间坐标，Y轴向上。
+                handScreenCoords.x = (indexFingerTip.x * 2) - 1;
+                // 注意这里要反向，因为摄像头是镜像的
+                handScreenCoords.x = -handScreenCoords.x; 
+                handScreenCoords.y = 1 - (indexFingerTip.y * 2);
+
+                // --- B. 检测捏合手势 (Thumb 4 vs Index 8) ---
+                const thumbTip = landmarks[4];
+                // 计算拇指和食指指尖的欧几里得距离
+                const pinchDistance = Math.sqrt(
+                    Math.pow(thumbTip.x - indexFingerTip.x, 2) +
+                    Math.pow(thumbTip.y - indexFingerTip.y, 2)
+                );
+
+                isPinching = pinchDistance < PINCH_THRESHOLD;
+
+                // 检测“刚刚捏合”的瞬间信号 (Trigger trigger)
+                if (isPinching && !wasPinching) {
+                    triggerNextShape();
+                }
+                // 更新上一帧状态
+                wasPinching = isPinching;
+
+            } else {
+                // 如果没检测到手，把交互点移到无穷远
+                handScreenCoords.set(999, 999);
+            }
+        }
+
+        // 配置 MediaPipe Hands
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+        hands.setOptions({
+            maxNumHands: 1, // 只追踪一只手
+            modelComplexity: 1, // 0最快，1中等，2最精确
+            minDetectionConfidence: 0.6,
+            minTrackingConfidence: 0.5
+        });
+        hands.onResults(onHandResults);
+
+        // 配置摄像头并启动
+        const cameraUtils = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 640, // 降低分辨率以提高性能
+            height: 480
+        });
+        
+        // 启动摄像头，成功后初始化 Three.js
+        cameraUtils.start()
+            .then(() => {
+                statusElement.innerText = "AI模型就绪，请在摄像头前挥手";
+                statusElement.style.color = "#00ff00";
+                initThreeJS();
+                animate();
+            })
+            .catch(err => {
+                statusElement.innerText = "摄像头启动失败: " + err;
+                statusElement.style.color = "#ff0000";
+            });
+
+
+        // =================================================================
+        // 2. Three.js 核心逻辑
+        // =================================================================
+
+        function triggerNextShape() {
+            // 切换形状时的视觉反馈（短暂闪烁白色）
+            particles.material.color.setHex(0xffffff);
+            setTimeout(() => {
+                particles.material.color.setHex(0xffffff); // 恢复顶点颜色
+            }, 300);
+
+            nextShape();
+        }
+
+        function initThreeJS() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x000000, 0.002);
+
+            camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 1, 2000);
+            camera.position.set(0, 0, 120); // 相机稍微拉远
+
+            renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // 限制像素比
+            document.body.appendChild(renderer.domElement);
+
+            // 轨道控制器
+            const controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 0.3; // 降低自动旋转速度，方便手势操作
+
+            // --- 交互层 setup ---
+            // 创建一个始终面向摄像机的隐形平面，用于捕捉手势的3D深度
+            const planeGeo = new THREE.PlaneGeometry(600, 600);
+            const planeMat = new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide });
+            planeMesh = new THREE.Mesh(planeGeo, planeMat);
+            scene.add(planeMesh);
+
+            // --- 粒子系统初始化 ---
+            geometry = new THREE.BufferGeometry();
+            positions = new Float32Array(PARTICLE_COUNT * 3);
+            targetPositions = new Float32Array(PARTICLE_COUNT * 3);
+            const colors = new Float32Array(PARTICLE_COUNT * 3);
+
+            const color1 = new THREE.Color(0x00ffff); // 青色
+            const color2 = new THREE.Color(0xff00ff); // 紫色
+
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                positions[i * 3] = (Math.random() - 0.5) * 300;
+                positions[i * 3 + 1] = (Math.random() - 0.5) * 300;
+                positions[i * 3 + 2] = (Math.random() - 0.5) * 300;
+
+                const mixedColor = color1.clone().lerp(color2, Math.random());
+                colors[i * 3] = mixedColor.r;
+                colors[i * 3 + 1] = mixedColor.g;
+                colors[i * 3 + 2] = mixedColor.b;
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            const material = new THREE.PointsMaterial({
+                size: PARTICLE_SIZE,
+                vertexColors: true,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+                transparent: true,
+                opacity: 0.8,
+                map: createParticleTexture()
+            });
+
+            particles = new THREE.Points(geometry, material);
+            scene.add(particles);
+
+            // --- 后处理 (Bloom) ---
+            const renderScene = new RenderPass(scene, camera);
+            const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+            bloomPass.threshold = 0;
+            bloomPass.strength = 1.3;
+            bloomPass.radius = 0.4;
+
+            composer = new EffectComposer(renderer);
+            composer.addPass(renderScene);
+            composer.addPass(bloomPass);
+
+            window.addEventListener('resize', onWindowResize);
+
+            // 启动初始形状
+            calculateTargetShape(0);
+        }
+
+        function createParticleTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 32; canvas.height = 32;
+            const ctx = canvas.getContext('2d');
+            const grad = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+            grad.addColorStop(0, 'rgba(255,255,255,1)');
+            grad.addColorStop(0.3, 'rgba(200,240,255,0.8)');
+            grad.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, 32, 32);
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        // --- 核心动画循环 ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // A. 更新交互坐标
+            if (isHandDetected) {
+                // 确保捕捉平面面向相机
+                planeMesh.lookAt(camera.position);
+                // 使用射线投射将屏幕 2D 手势坐标转为 3D 世界坐标
+                raycaster.setFromCamera(handScreenCoords, camera);
+                const intersects = raycaster.intersectObject(planeMesh);
+                if (intersects.length > 0) {
+                    // 平滑插值移动交互点
+                    handWorldPos.lerp(intersects[0].point, 0.2);
+                }
+            } else {
+                handWorldPos.set(9999, 9999, 9999);
+            }
+
+            // B. 粒子物理演算
+            const positionsArray = geometry.attributes.position.array;
+            
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const px = i * 3; const py = i * 3 + 1; const pz = i * 3 + 2;
+
+                // 1. 归位力 (Lerp飞向目标形状)
+                let vx = (targetPositions[px] - positionsArray[px]) * MORPH_SPEED;
+                let vy = (targetPositions[py] - positionsArray[py]) * MORPH_SPEED;
+                let vz = (targetPositions[pz] - positionsArray[pz]) * MORPH_SPEED;
+
+                // 2. 手势斥力 (仅当手被检测到时)
+                if (isHandDetected) {
+                    const dx = positionsArray[px] - handWorldPos.x;
+                    const dy = positionsArray[py] - handWorldPos.y;
+                    const dz = positionsArray[pz] - handWorldPos.z;
+                    const distSq = dx*dx + dy*dy + dz*dz;
+                    
+                    if (distSq < HAND_RADIUS * HAND_RADIUS) {
+                        const dist = Math.sqrt(distSq);
+                        const force = (HAND_RADIUS - dist) / HAND_RADIUS; 
+                        // 将粒子推开
+                        vx += (dx / dist) * force * HAND_FORCE * 0.15;
+                        vy += (dy / dist) * force * HAND_FORCE * 0.15;
+                        vz += (dz / dist) * force * HAND_FORCE * 0.15;
+                    }
+                }
+
+                // 3. 更新位置
+                positionsArray[px] += vx; positionsArray[py] += vy; positionsArray[pz] += vz;
+            }
+
+            geometry.attributes.position.needsUpdate = true;
+
+            // 缓慢自转
+            particles.rotation.y += 0.001;
+            
+            composer.render();
+        }
+
+        // --- 数学形状定义 (保持不变) ---
+        function nextShape() {
+            currentShape = (currentShape + 1) % shapes.length;
+            document.getElementById('shape-name').innerText = shapes[currentShape].name;
+            calculateTargetShape(currentShape);
+        }
+
+        function calculateTargetShape(shapeIndex) {
+            const func = shapes[shapeIndex].func;
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const pos = func(i);
+                targetPositions[i * 3] = pos.x;
+                targetPositions[i * 3 + 1] = pos.y;
+                targetPositions[i * 3 + 2] = pos.z;
+            }
+        }
+        // ... (以下数学函数与上一版相同，为节省篇幅省略，请确保包含它们) ...
+        function getGalaxyShape(i) { const angle = i*0.15; const r = 10+i*0.006; const x = Math.cos(angle)*r; const z = Math.sin(angle)*r; const y = (Math.random()-0.5)*r*0.4; return {x,y,z}; }
+        function getButterfly(i) { const t = (i/PARTICLE_COUNT)*12*Math.PI; const s = 18; const r = Math.exp(Math.cos(t)) - 2*Math.cos(4*t) + Math.pow(Math.sin(t/12),5); return { x: s*r*Math.sin(t), y: s*r*Math.cos(t), z: (Math.random()-0.5)*15 }; }
+        function getArchimedeanSpiral(i) { const t = i*0.08; const r = 0.6*t; return { x: r*Math.cos(t), y: i*0.003-50, z: r*Math.sin(t) }; }
+        function getKleinFigure(i) { const u = (i/PARTICLE_COUNT)*Math.PI*4; const v = (i%100)/100*Math.PI*2; const s = 5; const r = 4+Math.cos(u/2)*Math.sin(v)-Math.sin(u/2)*Math.sin(2*v); const x = s*r*Math.cos(u); const z = s*r*Math.sin(u); const y = s*(Math.sin(u/2)*Math.sin(v)+Math.cos(u/2)*Math.sin(2*v)); return {x,y,z}; }
+        function getLemniscate(i) { const t = (i/PARTICLE_COUNT)*Math.PI*2; const s = 65; const d = 1+Math.sin(t)**2; return { x: s*Math.cos(t)/d, y: s*Math.sin(t)*Math.cos(t)/d, z: (Math.random()-0.5)*20 }; }
+        function getRoseCurve(i) { const t = (i/PARTICLE_COUNT)*Math.PI*20; const s = 35; const r = Math.cos(4*t)*s; return { x: r*Math.cos(t), y: r*Math.sin(t), z: Math.sin(t*3)*20 }; }
+        function getSphereVolume(i) { const r = 45; const theta = Math.random()*Math.PI*2; const phi = Math.acos(2*Math.random()-1); let x = r*Math.sin(phi)*Math.cos(theta); let y = r*Math.sin(phi)*Math.sin(theta); let z = r*Math.cos(phi); if(i%5===0){x*=1.4;y*=1.4;z*=1.4;} return {x,y,z}; }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        }
+    </script>
+</body>
+</html>

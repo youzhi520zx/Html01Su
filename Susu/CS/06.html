@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Interactive Cosmic Vortex - Gesture Enabled</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        canvas { display: block; touch-action: none; /* 禁止默认的触摸滚动，完全交给Three.js */ }
+        #info {
+            position: absolute;
+            top: 20px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.8);
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 14px;
+            pointer-events: none;
+            z-index: 10;
+            text-shadow: 0 0 10px #00ffff;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
+            padding-bottom: 20px;
+        }
+        #tip {
+            font-size: 12px;
+            color: #ff00ff;
+            margin-top: 5px;
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="info">
+        正在演算: <span id="shape-name">宇宙混沌 (Cosmic Chaos)</span>
+        <div id="tip">交互提示: 移动鼠标或手指划过屏幕，扰动星辰</div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // --- 配置参数 ---
+        const PARTICLE_COUNT = 35000;
+        const PARTICLE_SIZE = 0.2;
+        const MORPH_SPEED = 0.03;      // 变形归位速度
+        const MOUSE_FORCE = 150;       // 鼠标斥力强度
+        const MOUSE_RADIUS = 35;       // 鼠标影响半径
+        const CHANGE_INTERVAL = 5000;  // 切换形状间隔
+
+        // --- 全局变量 ---
+        let scene, camera, renderer, composer;
+        let particles, geometry;
+        let positions, targetPositions;
+        let velocities; // 新增：用于物理模拟的速度数组
+        
+        let currentShape = 0;
+        
+        // 交互相关变量
+        const raycaster = new THREE.Raycaster();
+        const pointer = new THREE.Vector2(9999, 9999); // 初始在屏幕外
+        const mouseWorldPos = new THREE.Vector3(9999, 9999, 9999);
+        let planeMesh; // 一个隐形的平面，用于捕捉鼠标在3D空间的位置
+
+        // 形状列表
+        const shapes = [
+            { name: "宇宙漩涡 (Galaxy)", func: getGalaxyShape },
+            { name: "蝴蝶吸引子 (Butterfly)", func: getButterfly },
+            { name: "阿基米德螺旋 (Spiral)", func: getArchimedeanSpiral },
+            { name: "克莱因瓶结构 (Klein)", func: getKleinFigure }, // 新增复杂结构
+            { name: "伯努利双扭线 (Infinity)", func: getLemniscate },
+            { name: "玫瑰花球 (Rose Sphere)", func: getRoseCurve },
+            { name: "分形星云 (Nebula)", func: getSphereVolume }
+        ];
+
+        init();
+        animate();
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x000000, 0.002);
+
+            camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 1, 2000);
+            camera.position.set(0, 20, 100);
+
+            renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // 限制像素比以提升移动端性能
+            document.body.appendChild(renderer.domElement);
+
+            // 轨道控制器 (允许用户旋转视角)
+            const controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 0.8;
+            controls.enablePan = false; // 禁用平移，避免干扰触摸交互
+
+            // --- 交互层 setup ---
+            // 创建一个始终面向摄像机的隐形平面，用于计算鼠标的3D深度
+            const planeGeo = new THREE.PlaneGeometry(500, 500);
+            const planeMat = new THREE.MeshBasicMaterial({ visible: false });
+            planeMesh = new THREE.Mesh(planeGeo, planeMat);
+            scene.add(planeMesh);
+
+            // --- 粒子系统初始化 ---
+            geometry = new THREE.BufferGeometry();
+            
+            positions = new Float32Array(PARTICLE_COUNT * 3);
+            targetPositions = new Float32Array(PARTICLE_COUNT * 3);
+            velocities = new Float32Array(PARTICLE_COUNT * 3); // 速度缓冲
+            const colors = new Float32Array(PARTICLE_COUNT * 3);
+
+            const color1 = new THREE.Color(0x00ffff); // 青色
+            const color2 = new THREE.Color(0xff0088); // 紫红色
+
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                // 初始位置
+                positions[i * 3] = (Math.random() - 0.5) * 300;
+                positions[i * 3 + 1] = (Math.random() - 0.5) * 300;
+                positions[i * 3 + 2] = (Math.random() - 0.5) * 300;
+
+                // 颜色
+                const mixedColor = color1.clone().lerp(color2, Math.random());
+                colors[i * 3] = mixedColor.r;
+                colors[i * 3 + 1] = mixedColor.g;
+                colors[i * 3 + 2] = mixedColor.b;
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            // 粒子材质
+            const material = new THREE.PointsMaterial({
+                size: PARTICLE_SIZE,
+                vertexColors: true,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+                transparent: true,
+                opacity: 0.9,
+                map: createParticleTexture()
+            });
+
+            particles = new THREE.Points(geometry, material);
+            scene.add(particles);
+
+            // --- 后处理 (Bloom) ---
+            const renderScene = new RenderPass(scene, camera);
+            const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+            bloomPass.threshold = 0;
+            bloomPass.strength = 1.4; // 辉光更强
+            bloomPass.radius = 0.3;
+
+            composer = new EffectComposer(renderer);
+            composer.addPass(renderScene);
+            composer.addPass(bloomPass);
+
+            // --- 事件监听 ---
+            window.addEventListener('resize', onWindowResize);
+            document.addEventListener('mousemove', onPointerMove);
+            document.addEventListener('touchmove', onTouchMove, { passive: false });
+
+            // 启动
+            calculateTargetShape(0);
+            setInterval(nextShape, CHANGE_INTERVAL);
+        }
+
+        // --- 纹理生成 ---
+        function createParticleTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 32; canvas.height = 32;
+            const ctx = canvas.getContext('2d');
+            const grad = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+            grad.addColorStop(0, 'rgba(255,255,255,1)');
+            grad.addColorStop(0.4, 'rgba(200,240,255,0.8)');
+            grad.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, 32, 32);
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        // --- 交互事件处理 ---
+        function onPointerMove(event) {
+            pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
+            pointer.y = - (event.clientY / window.innerHeight) * 2 + 1;
+        }
+
+        function onTouchMove(event) {
+            if(event.touches.length > 0) {
+                pointer.x = (event.touches[0].clientX / window.innerWidth) * 2 - 1;
+                pointer.y = - (event.touches[0].clientY / window.innerHeight) * 2 + 1;
+                // 阻止默认滚动
+                // event.preventDefault(); 
+            }
+        }
+
+        // --- 核心动画循环 ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // 1. 更新交互平面的位置，使其始终面对摄像机，这样射线检测才准
+            planeMesh.lookAt(camera.position);
+            
+            // 2. 射线检测：找出鼠标在3D空间中的位置
+            raycaster.setFromCamera(pointer, camera);
+            const intersects = raycaster.intersectObject(planeMesh);
+            
+            if (intersects.length > 0) {
+                // 这是一个平滑处理，让交互点稍微有点延迟，更自然
+                mouseWorldPos.lerp(intersects[0].point, 0.1); 
+            } else {
+                // 如果鼠标移出，重置到一个很远的地方
+                mouseWorldPos.set(9999, 9999, 9999);
+            }
+
+            // 3. 粒子物理演算
+            const positionsArray = geometry.attributes.position.array;
+            
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const px = i * 3;
+                const py = i * 3 + 1;
+                const pz = i * 3 + 2;
+
+                // --- 步骤 A: 归位力 (让粒子飞向目标形状) ---
+                // 使用简单的弹簧物理：目标位置 - 当前位置
+                const tx = targetPositions[px];
+                const ty = targetPositions[py];
+                const tz = targetPositions[pz];
+
+                // 计算当前位置与目标位置的距离向量
+                let vx = (tx - positionsArray[px]) * MORPH_SPEED;
+                let vy = (ty - positionsArray[py]) * MORPH_SPEED;
+                let vz = (tz - positionsArray[pz]) * MORPH_SPEED;
+
+                // --- 步骤 B: 交互排斥力 (扰动) ---
+                // 计算粒子与鼠标的距离
+                const dx = positionsArray[px] - mouseWorldPos.x;
+                const dy = positionsArray[py] - mouseWorldPos.y;
+                const dz = positionsArray[pz] - mouseWorldPos.z;
+                
+                const distSq = dx*dx + dy*dy + dz*dz; // 距离平方 (比开根号快)
+                
+                // 如果粒子在鼠标影响范围内
+                if (distSq < MOUSE_RADIUS * MOUSE_RADIUS) {
+                    const dist = Math.sqrt(distSq);
+                    // 力度随着距离衰减 (离得越近，推力越大)
+                    const force = (MOUSE_RADIUS - dist) / MOUSE_RADIUS; 
+                    
+                    // 将粒子推开
+                    const repulsionX = (dx / dist) * force * MOUSE_FORCE * 0.1;
+                    const repulsionY = (dy / dist) * force * MOUSE_FORCE * 0.1;
+                    const repulsionZ = (dz / dist) * force * MOUSE_FORCE * 0.1;
+                    
+                    // 将排斥力叠加到速度上
+                    vx += repulsionX;
+                    vy += repulsionY;
+                    vz += repulsionZ;
+                }
+
+                // --- 步骤 C: 更新位置 ---
+                positionsArray[px] += vx;
+                positionsArray[py] += vy;
+                positionsArray[pz] += vz;
+            }
+
+            geometry.attributes.position.needsUpdate = true;
+
+            // 整体旋转
+            particles.rotation.y += 0.001;
+            
+            // 渲染
+            composer.render();
+        }
+
+        // --- 数学形状定义 ---
+
+        function nextShape() {
+            currentShape = (currentShape + 1) % shapes.length;
+            document.getElementById('shape-name').innerText = shapes[currentShape].name;
+            calculateTargetShape(currentShape);
+        }
+
+        function calculateTargetShape(shapeIndex) {
+            const func = shapes[shapeIndex].func;
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const pos = func(i);
+                targetPositions[i * 3] = pos.x;
+                targetPositions[i * 3 + 1] = pos.y;
+                targetPositions[i * 3 + 2] = pos.z;
+            }
+        }
+
+        // 1. 漩涡
+        function getGalaxyShape(i) {
+            const angle = i * 0.15;
+            const r = 10 + i * 0.006;
+            const x = Math.cos(angle) * r;
+            const z = Math.sin(angle) * r;
+            const y = (Math.random()-0.5) * r * 0.4; 
+            return {x, y, z};
+        }
+
+        // 2. 蝴蝶
+        function getButterfly(i) {
+            const t = (i / PARTICLE_COUNT) * 12 * Math.PI;
+            const s = 18;
+            const r = Math.exp(Math.cos(t)) - 2 * Math.cos(4 * t) + Math.pow(Math.sin(t / 12), 5);
+            return {
+                x: s * r * Math.sin(t),
+                y: s * r * Math.cos(t),
+                z: (Math.random()-0.5) * 15
+            };
+        }
+
+        // 3. 螺旋
+        function getArchimedeanSpiral(i) {
+            const t = i * 0.08; 
+            const r = 0.6 * t;
+            return {
+                x: r * Math.cos(t),
+                y: i * 0.003 - 50,
+                z: r * Math.sin(t)
+            };
+        }
+
+        // 4. 克莱因瓶结构 (Klein Figure 8) - 新增
+        function getKleinFigure(i) {
+            const u = (i / PARTICLE_COUNT) * Math.PI * 4;
+            const v = (i % 100) / 100 * Math.PI * 2;
+            const s = 5; 
+            
+            // 这是一个类似于克莱因瓶或Figure-8的扭曲结构
+            const r = 4 + Math.cos(u/2) * Math.sin(v) - Math.sin(u/2) * Math.sin(2*v);
+            const x = s * r * Math.cos(u);
+            const z = s * r * Math.sin(u);
+            const y = s * (Math.sin(u/2) * Math.sin(v) + Math.cos(u/2) * Math.sin(2*v));
+            
+            return {x, y, z};
+        }
+
+        // 5. 双扭线
+        function getLemniscate(i) {
+            const t = (i / PARTICLE_COUNT) * Math.PI * 2;
+            const s = 65;
+            const d = 1 + Math.sin(t)**2;
+            return {
+                x: s * Math.cos(t) / d,
+                y: s * Math.sin(t) * Math.cos(t) / d,
+                z: (Math.random()-0.5) * 20
+            };
+        }
+
+        // 6. 玫瑰球
+        function getRoseCurve(i) {
+            const t = (i / PARTICLE_COUNT) * Math.PI * 20;
+            const s = 35;
+            const r = Math.cos(4 * t) * s;
+            return {
+                x: r * Math.cos(t),
+                y: r * Math.sin(t),
+                z: Math.sin(t * 3) * 20
+            };
+        }
+
+        // 7. 分形/混沌球
+        function getSphereVolume(i) {
+            const r = 45;
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+            let x = r * Math.sin(phi) * Math.cos(theta);
+            let y = r * Math.sin(phi) * Math.sin(theta);
+            let z = r * Math.cos(phi);
+            if(i % 5 === 0) { x*=1.4; y*=1.4; z*=1.4; } // 噪点
+            return {x, y, z};
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        }
+    </script>
+</body>
+</html>

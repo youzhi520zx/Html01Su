@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 粒子系统 (零依赖调试版)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050505; font-family: monospace; }
+        
+        /* 屏幕日志窗口 */
+        #debug-console {
+            position: absolute; top: 0; left: 0; width: 300px; height: 100%;
+            background: rgba(0, 0, 50, 0.8); color: #0f0; padding: 10px;
+            overflow-y: auto; z-index: 1000; font-size: 12px;
+            border-right: 1px solid #00ffcc; pointer-events: none;
+        }
+        .log-info { color: #0f0; margin-bottom: 5px; }
+        .log-warn { color: #ff0; margin-bottom: 5px; }
+        .log-error { color: #f00; font-weight: bold; margin-bottom: 5px; background: #220000; }
+
+        /* 视频隐藏 */
+        #video-input { display: none; }
+        
+        /* 提示层 */
+        #instruction {
+            position: absolute; top: 20px; left: 320px; color: white;
+            font-size: 1.2rem; pointer-events: none; text-shadow: 0 0 5px black;
+        }
+    </style>
+
+    <script>
+        window.onload = function() {
+            const consoleDiv = document.getElementById('debug-console');
+            function screenLog(msg, type='info') {
+                const div = document.createElement('div');
+                div.className = `log-${type}`;
+                div.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
+                consoleDiv.appendChild(div);
+                consoleDiv.scrollTop = consoleDiv.scrollHeight;
+            }
+            window.screenLog = screenLog; // 挂载到全局
+
+            // 检查是不是 file:// 协议
+            if (window.location.protocol === 'file:') {
+                screenLog("❌ 严重错误: 检测到 file:// 协议", 'error');
+                screenLog("请勿直接双击打开 HTML 文件！", 'error');
+                screenLog("必须使用 VS Code Live Server 或本地服务器打开。", 'error');
+                alert("请不要直接双击打开！请使用 VS Code 的 Live Server 插件运行。");
+            } else {
+                screenLog("✅ 环境检测通过: HTTP协议已启用");
+            }
+        };
+        
+        window.onerror = function(msg, source, lineno) {
+            if(window.screenLog) window.screenLog(`全局错误: ${msg} (行:${lineno})`, 'error');
+        }
+    </script>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://npm.elemecdn.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://npm.elemecdn.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+    <div id="debug-console">
+        <div>=== 系统日志 (截图发给开发者) ===</div>
+    </div>
+    
+    <div id="instruction">
+        当前模式：基础形状 (鼠标按住消散 / 松开聚集)<br>
+        <span style="font-size:0.8rem; color:#aaa">正在后台尝试加载字体和摄像头...</span>
+    </div>
+    
+    <video id="video-input"></video>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { FontLoader } from 'three/addons/loaders/FontLoader.js';
+        import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
+        import GUI from 'three/addons/libs/lil-gui.module.min.js';
+
+        // 立即记录
+        window.screenLog("🚀 脚本开始执行...");
+
+        // === 变量 ===
+        let scene, camera, renderer, particles;
+        let targetPositions = [];
+        let font = null;
+        let isHandMode = false;
+        let handClosed = false;
+        let isMouseDown = false;
+        
+        const config = {
+            particleColor: '#00ffcc',
+            particleSize: 0.2,
+            lerpSpeed: 0.1
+        };
+
+        // === 1. 初始化场景 (立即执行，不等待) ===
+        try {
+            initScene();
+            window.screenLog("✅ Three.js 场景初始化成功");
+            // 立即创建一个立方体，确保屏幕上有东西
+            createShape('box'); 
+            animate();
+            window.screenLog("✅ 动画循环已启动");
+        } catch (e) {
+            window.screenLog(`❌ 初始化崩溃: ${e.message}`, 'error');
+        }
+
+        function initScene() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 20;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // 交互事件
+            document.addEventListener('mousedown', () => isMouseDown = true);
+            document.addEventListener('mouseup', () => isMouseDown = false);
+            document.addEventListener('touchstart', () => isMouseDown = true);
+            document.addEventListener('touchend', () => isMouseDown = false);
+            
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+
+        // === 2. 粒子生成器 ===
+        function createShape(type, textStr = '') {
+            if (particles) {
+                scene.remove(particles);
+                if(particles.geometry) particles.geometry.dispose();
+            }
+
+            let geo;
+            const count = 3000;
+
+            if (type === 'text' && font) {
+                geo = new TextGeometry(textStr, {
+                    font: font, size: 3, height: 0.2, curveSegments: 6
+                });
+                geo.center(); // 居中
+            } else {
+                // 默认形状：立方体
+                geo = new THREE.BoxGeometry(10, 10, 10, 10, 10, 10);
+                if (type === 'sphere') geo = new THREE.SphereGeometry(6, 32, 32);
+                window.screenLog(`ℹ️ 生成基础形状: ${type}`);
+            }
+
+            // 提取目标点
+            const posAttr = geo.attributes.position;
+            targetPositions = [];
+            for(let i=0; i<count; i++) {
+                const idx = i % posAttr.count;
+                targetPositions.push(posAttr.getX(idx), posAttr.getY(idx), posAttr.getZ(idx));
+            }
+
+            // 粒子系统
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(count * 3);
+            for(let i=0; i<count * 3; i++) positions[i] = (Math.random() - 0.5) * 60; // 随机初始位
+            
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            
+            const material = new THREE.PointsMaterial({
+                color: config.particleColor,
+                size: config.particleSize,
+                transparent: true, opacity: 0.8,
+                blending: THREE.AdditiveBlending
+            });
+
+            particles = new THREE.Points(geometry, material);
+            scene.add(particles);
+        }
+
+        // === 3. 动画 ===
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            if (!particles) return;
+            
+            // 判断是否分散：手势闭合 OR 鼠标按下
+            const disperse = isHandMode ? handClosed : isMouseDown;
+            const time = Date.now() * 0.001;
+            
+            const positions = particles.geometry.attributes.position.array;
+            
+            for(let i=0; i<positions.length; i+=3) {
+                const px = positions[i];
+                const py = positions[i+1];
+                const pz = positions[i+2];
+                
+                const tx = targetPositions[i];
+                const ty = targetPositions[i+1];
+                const tz = targetPositions[i+2];
+                
+                let vx, vy, vz;
+                
+                if (disperse) {
+                    // 炸开效果
+                    vx = px * 0.05 + Math.sin(py + time) * 0.1;
+                    vy = py * 0.05 + Math.cos(px + time) * 0.1;
+                    vz = pz * 0.05;
+                } else {
+                    // 聚拢效果
+                    vx = (tx - px) * config.lerpSpeed;
+                    vy = (ty - py) * config.lerpSpeed;
+                    vz = (tz - pz) * config.lerpSpeed;
+                }
+                
+                positions[i] += vx;
+                positions[i+1] += vy;
+                positions[i+2] += vz;
+            }
+            
+            particles.geometry.attributes.position.needsUpdate = true;
+            renderer.render(scene, camera);
+        }
+
+        // === 4. 异步加载资源 (不阻塞主流程) ===
+        
+        // (A) 加载字体
+        window.screenLog("⏳ 开始后台加载字体...");
+        const loader = new FontLoader();
+        loader.load('https://npm.elemecdn.com/three@0.160.0/examples/fonts/helvetiker_bold.typeface.json', 
+            (res) => {
+                font = res;
+                window.screenLog("✅ 字体加载成功! 切换为文字模式");
+                createShape('text', 'Hello!');
+                initGUI(); // 有字体了再显示GUI
+            },
+            undefined,
+            (err) => window.screenLog("⚠️ 字体加载失败(可能是网络)，保持形状模式", 'warn')
+        );
+
+        // (B) 加载摄像头 AI
+        window.screenLog("⏳ 开始后台加载 MediaPipe AI...");
+        try {
+            const videoElement = document.getElementById('video-input');
+            const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+            
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 0 });
+            hands.onResults((results) => {
+                if(!isHandMode) {
+                    isHandMode = true;
+                    window.screenLog("✅ 摄像头/手势识别已激活!", 'info');
+                    document.getElementById('instruction').innerText = "手势控制：张开手=聚集，捏合手=消散";
+                }
+                
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    const lm = results.multiHandLandmarks[0];
+                    const d = Math.sqrt(Math.pow(lm[4].x - lm[8].x, 2) + Math.pow(lm[4].y - lm[8].y, 2));
+                    handClosed = d < 0.08;
+                }
+            });
+
+            const cameraUtils = new Camera(videoElement, {
+                onFrame: async () => await hands.send({image: videoElement}),
+                width: 640, height: 480
+            });
+            cameraUtils.start().catch(e => window.screenLog(`⚠️ 摄像头无法启动: ${e}`, 'warn'));
+            
+        } catch(e) {
+            window.screenLog(`⚠️ MediaPipe 初始化失败: ${e}`, 'warn');
+        }
+
+        function initGUI() {
+            const gui = new GUI();
+            const params = { text: 'Merry Christmas' };
+            gui.add(params, 'text').onChange(v => createShape('text', v));
+            gui.addColor(config, 'particleColor').onChange(v => particles.material.color.set(v));
+        }
+
+    </script>
+</body>
+</html>

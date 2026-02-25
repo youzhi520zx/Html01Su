@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Cosmic Math Vortex - AI Hand Control</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', Courier, monospace; }
+        canvas { display: block; }
+        
+        #ui-container {
+            position: absolute;
+            top: 20px;
+            width: 100%;
+            text-align: center;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        #title {
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 18px;
+            text-shadow: 0 0 10px #00ffff;
+            margin-bottom: 10px;
+        }
+
+        #status {
+            color: #ffff00;
+            font-size: 14px;
+            background: rgba(0,0,0,0.6);
+            padding: 5px 10px;
+            border-radius: 4px;
+            display: inline-block;
+        }
+
+        #instruction {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255,255,255,0.6);
+            font-size: 12px;
+            pointer-events: none;
+        }
+        
+        /* 隐藏原始视频元素，我们只用它来做分析 */
+        #input-video {
+            display: none; 
+        }
+
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 24px;
+            animation: pulse 1s infinite;
+            z-index: 100;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.5; }
+            100% { opacity: 1; text-shadow: 0 0 20px cyan; }
+        }
+    </style>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+<div id="loading" class="loading">正在初始化 AI 视觉核心...<br><span style="font-size:14px">请允许摄像头权限</span></div>
+
+<div id="ui-container">
+    <div id="title">COSMIC HAND CONTROL</div>
+    <div id="status">等待手势识别...</div>
+</div>
+
+<div id="instruction">
+    🖐️ 1-5指切换形态 | 👌 捏合手指生成黑洞 | 🤚 移动手掌控制引力中心
+</div>
+
+<audio id="bgm" loop>
+    <source src="https://cdn.pixabay.com/download/audio/2022/03/10/audio_c8c8a73467.mp3?filename=cosmic-glow-14282.mp3" type="audio/mp3">
+</audio>
+
+<video id="input-video"></video>
+
+<script>
+    // --- 1. Three.js 场景初始化 ---
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x000000, 0.0006);
+
+    const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 1, 20000);
+    camera.position.z = 1000;
+    camera.position.y = 0;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    document.body.appendChild(renderer.domElement);
+
+    // --- 2. 粒子系统构建 ---
+    const particleCount = 20000; // 粒子数量
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(particleCount * 3);
+    const targetPositions = new Float32Array(particleCount * 3);
+    const colors = new Float32Array(particleCount * 3);
+    const colorObj = new THREE.Color();
+
+    // 初始状态：散乱
+    for (let i = 0; i < particleCount; i++) {
+        positions[i * 3] = (Math.random() - 0.5) * 2000;
+        positions[i * 3 + 1] = (Math.random() - 0.5) * 2000;
+        positions[i * 3 + 2] = (Math.random() - 0.5) * 2000;
+        
+        targetPositions[i] = positions[i]; // 初始目标相同
+
+        colorObj.setHSL(Math.random(), 0.8, 0.5);
+        colors[i * 3] = colorObj.r;
+        colors[i * 3 + 1] = colorObj.g;
+        colors[i * 3 + 2] = colorObj.b;
+    }
+
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+    // 辉光材质
+    function getTexture() {
+        const c = document.createElement('canvas');
+        c.width = 32; c.height = 32;
+        const ctx = c.getContext('2d');
+        const g = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+        g.addColorStop(0, 'rgba(255,255,255,1)');
+        g.addColorStop(0.4, 'rgba(100,200,255,0.5)');
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0,0,32,32);
+        const t = new THREE.Texture(c);
+        t.needsUpdate = true;
+        return t;
+    }
+
+    const material = new THREE.PointsMaterial({
+        size: 8,
+        map: getTexture(),
+        vertexColors: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        transparent: true,
+        opacity: 0.8
+    });
+
+    const particles = new THREE.Points(geometry, material);
+    scene.add(particles);
+
+    // --- 3. 数学形态生成库 ---
+    function getShapePos(shapeIndex, i) {
+        const t = (i / particleCount) * Math.PI * 2;
+        let x=0, y=0, z=0;
+
+        switch (shapeIndex) {
+            case 0: // 0指/拳头: 黑洞奇点 (Chaos Sphere)
+                const r = 100 * Math.random(); 
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos(2 * Math.random() - 1);
+                x = r * Math.sin(phi) * Math.cos(theta);
+                y = r * Math.sin(phi) * Math.sin(theta);
+                z = r * Math.cos(phi);
+                break;
+
+            case 1: // 1指: 阿基米德螺旋 (Archimedean Spiral)
+                const rt = i * 0.05; 
+                const angle = i * 0.01;
+                x = rt * Math.cos(angle);
+                z = rt * Math.sin(angle);
+                y = (i - particleCount/2) * 0.1;
+                break;
+
+            case 2: // 2指: 伯努利双扭线 (Lemniscate / Infinity)
+                const lt = t * 10;
+                const scaleL = 500;
+                const denom = 1 + Math.sin(lt) * Math.sin(lt);
+                x = scaleL * Math.cos(lt) / denom;
+                y = scaleL * Math.sin(lt) * Math.cos(lt) / denom;
+                z = (i % 200 - 100) * 2; // 厚度
+                break;
+            
+            case 3: // 3指: 蝴蝶曲线 (Butterfly)
+                const bt = t * 12;
+                const br = 150 * (Math.exp(Math.cos(bt)) - 2*Math.cos(4*bt) - Math.pow(Math.sin(bt/12),5));
+                x = br * Math.sin(bt);
+                y = br * Math.cos(bt);
+                z = (Math.random()-0.5)*100;
+                break;
+
+            case 4: // 4指: 玫瑰曲线 (Rose Curve)
+                const k = 4;
+                const rr = 500 * Math.cos(k * t * 10);
+                x = rr * Math.cos(t * 10);
+                z = rr * Math.sin(t * 10);
+                y = (Math.random() - 0.5) * 200;
+                break;
+
+            case 5: // 5指: 心形线 (Cardioid Heart)
+            default:
+                const ct = t/2; 
+                const cp = (i % 100)/100 * Math.PI * 2;
+                x = 12 * 16 * Math.pow(Math.sin(ct), 3) * Math.cos(cp);
+                z = 12 * 16 * Math.pow(Math.sin(ct), 3) * Math.sin(cp);
+                y = 12 * (13 * Math.cos(ct) - 5 * Math.cos(2*ct) - 2 * Math.cos(3*ct) - Math.cos(4*ct));
+                // 旋转一下让它正对
+                const temp = y; y = z; z = temp;
+                break;
+        }
+        return {x, y, z};
+    }
+
+    // --- 4. 手势控制逻辑 (MediaPipe) ---
+    let handX = 0, handY = 0; // 手部中心坐标 (归一化 -1 到 1)
+    let isPinching = false;   // 是否捏合
+    let fingerCount = 5;      // 伸出的手指数
+    let currentShapeIndex = 5; // 当前展示的形状
+    let lastShapeIndex = -1;  // 上一次的形状
+
+    const videoElement = document.getElementById('input-video');
+    const statusDiv = document.getElementById('status');
+    const loadingDiv = document.getElementById('loading');
+
+    function onResults(results) {
+        // 隐藏加载动画
+        loadingDiv.style.display = 'none';
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            const landmarks = results.multiHandLandmarks[0];
+
+            // 1. 计算手掌中心 (用腕部(0)和中指根部(9)的平均值)
+            // 注意：MediaPipe的X坐标是镜像的，且范围是0-1
+            const cx = (landmarks[0].x + landmarks[9].x) / 2;
+            const cy = (landmarks[0].y + landmarks[9].y) / 2;
+            
+            // 映射到 Three.js 屏幕坐标 (-1 到 1)
+            // x需要反转 (1 - cx) 才能符合镜像习惯
+            handX = (1 - cx) * 2 - 1; 
+            handY = -(cy * 2 - 1);
+
+            // 2. 检测捏合 (拇指尖(4) 与 食指尖(8) 的距离)
+            const dx = landmarks[4].x - landmarks[8].x;
+            const dy = landmarks[4].y - landmarks[8].y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            
+            isPinching = dist < 0.05; // 阈值，根据实际情况调整
+
+            // 3. 计算伸出的手指数
+            fingerCount = countFingers(landmarks);
+            
+            // 如果不是捏合状态，则根据手指数量切换形状
+            if (!isPinching) {
+                currentShapeIndex = fingerCount;
+            } else {
+                currentShapeIndex = 0; // 捏合时强制变为混沌/奇点
+            }
+
+            // UI 反馈
+            let shapeName = ["混沌奇点 (黑洞)", "阿基米德螺旋", "无限双扭线", "蝴蝶星云", "玫瑰花环", "爱心宇宙"][currentShapeIndex] || "未知";
+            let action = isPinching ? "【引力坍缩中】" : "【形态稳定】";
+            statusDiv.innerHTML = `手指: ${fingerCount} | 状态: ${action} <br> 形态: ${shapeName}`;
+            statusDiv.style.color = isPinching ? '#ff3333' : '#ffff00';
+
+        } else {
+            statusDiv.innerText = "未检测到手掌...";
+            isPinching = false;
+        }
+    }
+
+    function countFingers(landmarks) {
+        let count = 0;
+        // 拇指 (比较x坐标，因为拇指关节运动主要在x轴，需区分左右手，这里简化处理)
+        // 简单逻辑：如果拇指尖(4)比关节(3)离小指更远，则算伸出。
+        // 为了简化，这里主要用食指到小指的Y轴判断（手掌向上时）
+        // Tip (指尖) < PIP (第二关节) 意味着手指伸直 (Y轴向下增大，屏幕上方Y小)
+        
+        if (landmarks[8].y < landmarks[6].y) count++; // 食指
+        if (landmarks[12].y < landmarks[10].y) count++; // 中指
+        if (landmarks[16].y < landmarks[14].y) count++; // 无名指
+        if (landmarks[20].y < landmarks[18].y) count++; // 小指
+        
+        // 拇指比较特殊，简单判断：拇指尖和食指掌关节的距离 vs 拇指关节和食指掌关节
+        // 这里做一个简化的距离判断
+        const thumbTip = landmarks[4];
+        const indexBase = landmarks[5];
+        const thumbBase = landmarks[2];
+        if (Math.hypot(thumbTip.x - indexBase.x, thumbTip.y - indexBase.y) > 
+            Math.hypot(thumbBase.x - indexBase.x, thumbBase.y - indexBase.y) * 1.2) {
+            count++;
+        }
+        
+        return count;
+    }
+
+    // 初始化 MediaPipe Hands
+    const hands = new Hands({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
+
+    hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.6
+    });
+
+    hands.onResults(onResults);
+
+    // 启动摄像头
+    const cameraUtils = new Camera(videoElement, {
+        onFrame: async () => {
+            await hands.send({image: videoElement});
+        },
+        width: 640,
+        height: 480
+    });
+    cameraUtils.start();
+
+
+    // --- 5. 动画循环与物理更新 ---
+    const clock = new THREE.Clock();
+
+    function animate() {
+        requestAnimationFrame(animate);
+        
+        const time = Date.now() * 0.0005;
+        
+        // 1. 如果形状改变，更新所有粒子的目标位置
+        if (currentShapeIndex !== lastShapeIndex) {
+            for (let i = 0; i < particleCount; i++) {
+                const pos = getShapePos(currentShapeIndex, i);
+                targetPositions[i * 3] = pos.x;
+                targetPositions[i * 3 + 1] = pos.y;
+                targetPositions[i * 3 + 2] = pos.z;
+            }
+            lastShapeIndex = currentShapeIndex;
+            
+            // 播放音乐（如果是第一次互动）
+            const audio = document.getElementById('bgm');
+            if(audio.paused) audio.play().catch(e=>{});
+        }
+
+        const positionsAttribute = geometry.attributes.position;
+        const colorsAttribute = geometry.attributes.color;
+
+        // 手掌位置映射到3D空间范围
+        const targetX = handX * 800; // 放大系数
+        const targetY = handY * 600;
+
+        for (let i = 0; i < particleCount; i++) {
+            let px = positionsAttribute.array[i * 3];
+            let py = positionsAttribute.array[i * 3 + 1];
+            let pz = positionsAttribute.array[i * 3 + 2];
+
+            // 基础目标位置
+            let tx = targetPositions[i * 3];
+            let ty = targetPositions[i * 3 + 1];
+            let tz = targetPositions[i * 3 + 2];
+
+            // 逻辑分支：捏合 vs 展开
+            if (isPinching) {
+                // 如果捏合：所有粒子向手部中心坍缩 (黑洞效果)
+                // 加上一点随机抖动模拟不稳定能量
+                tx = targetX + (Math.random()-0.5) * 100;
+                ty = targetY + (Math.random()-0.5) * 100;
+                tz = (Math.random()-0.5) * 100;
+                
+                // 坍缩速度快
+                px += (tx - px) * 0.08;
+                py += (ty - py) * 0.08;
+                pz += (tz - pz) * 0.08;
+            } else {
+                // 如果展开：粒子飞向数学形状的目标位置
+                // 但是形状整体跟随手部位置移动
+                tx += targetX;
+                ty += targetY;
+                
+                // 平滑插值 (Lerp)
+                px += (tx - px) * 0.04;
+                py += (ty - py) * 0.04;
+                pz += (tz - pz) * 0.04;
+            }
+
+            positionsAttribute.array[i * 3] = px;
+            positionsAttribute.array[i * 3 + 1] = py;
+            positionsAttribute.array[i * 3 + 2] = pz;
+
+            // 颜色动态变化
+            // 捏合时变红/紫，平时根据时间流转
+            if (isPinching) {
+                colorObj.setHSL(0.95, 0.9, 0.6); // Red/Pink
+            } else {
+                const h = (time * 0.1 + i / particleCount * 0.2) % 1;
+                colorObj.setHSL(h, 0.8, 0.6);
+            }
+            
+            colorsAttribute.array[i * 3] = colorObj.r;
+            colorsAttribute.array[i * 3 + 1] = colorObj.g;
+            colorsAttribute.array[i * 3 + 2] = colorObj.b;
+        }
+
+        positionsAttribute.needsUpdate = true;
+        colorsAttribute.needsUpdate = true;
+
+        // 缓慢旋转整个场景
+        particles.rotation.y = time * 0.1;
+        
+        renderer.render(scene, camera);
+    }
+
+    // 窗口自适应
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    animate();
+
+</script>
+</body>
+</html>

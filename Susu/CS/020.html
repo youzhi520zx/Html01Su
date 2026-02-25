@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 手势粒子 (修复调试版)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
+        .input_video { display: none; } /* 隐藏原始视频流 */
+
+        /* 状态显示面板 */
+        #status-panel {
+            position: fixed; top: 10px; left: 10px; z-index: 999;
+            background: rgba(0, 0, 0, 0.8); padding: 15px; border-radius: 8px;
+            color: #fff; max-width: 300px; border: 1px solid #333; pointer-events: none;
+        }
+        .log-item { margin-bottom: 5px; font-size: 12px; }
+        .log-error { color: #ff4444; font-weight: bold; }
+        .log-success { color: #00ff88; }
+        .log-warn { color: #ffaa00; }
+    </style>
+
+    <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/lil-gui@0.17.0/dist/lil-gui.umd.min.js"></script>
+    <script src="https://unpkg.com/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <div id="status-panel">
+        <div class="log-item">系统初始化中...</div>
+    </div>
+
+    <video class="input_video"></video>
+    <div id="canvas-container"></div>
+
+    <script>
+        // --- 日志工具 ---
+        const logPanel = document.getElementById('status-panel');
+        function log(msg, type = 'normal') {
+            const div = document.createElement('div');
+            div.className = `log-item ${type === 'error' ? 'log-error' : type === 'success' ? 'log-success' : ''}`;
+            div.innerText = `> ${msg}`;
+            logPanel.appendChild(div);
+            console.log(msg);
+        }
+
+        // 全局错误捕获
+        window.onerror = function(message, source, lineno, colno, error) {
+            log(`错误: ${message}`, 'error');
+            log(`提示: 请确保使用 localhost 或 HTTPS 运行，不要直接双击 HTML 文件。`, 'warn');
+        };
+
+        // --- 1. Three.js 场景设置 ---
+        log('1. 正在启动 3D 引擎...');
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x000000, 0.002);
+        
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 30;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+        log('3D 引擎启动成功', 'success');
+
+        // --- 2. 粒子系统 ---
+        const particleCount = 12000;
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(particleCount * 3);
+        const targetPositions = new Float32Array(particleCount * 3);
+        const randomOffsets = new Float32Array(particleCount * 3);
+
+        for (let i = 0; i < particleCount * 3; i++) {
+            positions[i] = (Math.random() - 0.5) * 100;
+            randomOffsets[i] = (Math.random() - 0.5) * 20;
+        }
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        
+        const material = new THREE.PointsMaterial({
+            color: 0x00ffff, size: 0.15, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending
+        });
+        const particles = new THREE.Points(geometry, material);
+        scene.add(particles);
+
+        // --- 形状逻辑 ---
+        function getSpherePoint(r) {
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+            return { x: r * Math.sin(phi) * Math.cos(theta), y: r * Math.sin(phi) * Math.sin(theta), z: r * Math.cos(phi) };
+        }
+        const shapes = {
+            heart: () => {
+                const t = Math.random() * Math.PI * 2;
+                let x = 16 * Math.pow(Math.sin(t), 3);
+                let y = 13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t);
+                const s = 0.5 + Math.random() * 0.5;
+                return { x: x * s, y: y * s, z: (Math.random() - 0.5) * 5 };
+            },
+            sphere: () => getSpherePoint(10)
+        };
+        
+        function transformShape() {
+            // 默认只展示爱心，简化逻辑
+            for (let i = 0; i < particleCount; i++) {
+                const pos = shapes.heart();
+                targetPositions[i * 3] = pos.x;
+                targetPositions[i * 3 + 1] = pos.y;
+                targetPositions[i * 3 + 2] = pos.z;
+            }
+        }
+        transformShape();
+
+        // --- 3. MediaPipe 手势 ---
+        let pinchFactor = 1.0;
+        let isHandDetected = false;
+
+        log('2. 正在加载 AI 模型 (需联网)...');
+
+        try {
+            const hands = new Hands({locateFile: (file) => {
+                return `https://unpkg.com/@mediapipe/hands/${file}`;
+            }});
+
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+
+            hands.onResults(results => {
+                if (!isHandDetected && results.multiHandLandmarks.length > 0) {
+                    isHandDetected = true;
+                    log('检测到手势！互动开始', 'success');
+                    logPanel.style.opacity = 0.5; // 淡出日志
+                }
+                
+                if (results.multiHandLandmarks.length > 0) {
+                    const lm = results.multiHandLandmarks[0];
+                    // 拇指(4) 与 食指(8)
+                    const d = Math.sqrt(Math.pow(lm[4].x - lm[8].x, 2) + Math.pow(lm[4].y - lm[8].y, 2));
+                    
+                    let target = 1.0;
+                    if (d < 0.05) target = 0.1; // 捏合 -> 聚拢
+                    else if (d > 0.15) target = 2.5; // 张开 -> 扩散
+                    
+                    pinchFactor += (target - pinchFactor) * 0.1;
+                } else {
+                    pinchFactor += (1.0 - pinchFactor) * 0.05;
+                }
+            });
+
+            const videoElement = document.querySelector('.input_video');
+            const cameraUtils = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 320, height: 240
+            });
+
+            cameraUtils.start()
+                .then(() => log('摄像头启动成功', 'success'))
+                .catch(e => log(`摄像头启动失败: ${e}`, 'error'));
+
+        } catch (e) {
+            log(`MediaPipe 初始化失败: ${e}`, 'error');
+        }
+
+        // --- 4. 动画循环 ---
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // 即使没有摄像头，粒子也应该显示
+            const positions = geometry.attributes.position.array;
+            const isDiffusing = pinchFactor > 1.5;
+
+            for(let i=0; i<particleCount; i++) {
+                const ix = i*3, iy = i*3+1, iz = i*3+2;
+                let tx = targetPositions[ix] * pinchFactor;
+                let ty = targetPositions[iy] * pinchFactor;
+                let tz = targetPositions[iz] * pinchFactor;
+
+                if(isDiffusing) {
+                    const str = (pinchFactor - 1.5);
+                    tx += randomOffsets[ix] * str;
+                    ty += randomOffsets[iy] * str;
+                    tz += randomOffsets[iz] * str;
+                }
+
+                positions[ix] += (tx - positions[ix]) * 0.1;
+                positions[iy] += (ty - positions[iy]) * 0.1;
+                positions[iz] += (tz - positions[iz]) * 0.1;
+            }
+            geometry.attributes.position.needsUpdate = true;
+            particles.rotation.y += 0.002;
+            renderer.render(scene, camera);
+        }
+        animate();
+        
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>

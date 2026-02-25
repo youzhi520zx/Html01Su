@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Cosmic Architect - Dual Hand & UI</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', Courier, monospace; }
+        canvas { display: block; }
+
+        /* UI 面板自定义样式 (lil-gui 会自动生成，这里微调位置) */
+        .lil-gui { 
+            top: 10px; 
+            right: 10px; 
+            --background-color: rgba(0, 10, 20, 0.8);
+            --text-color: #00ffff;
+            --title-background-color: #003344;
+            --widget-color: #005566;
+            --hover-color: #007788;
+            --focus-color: #0099aa;
+            --number-color: #00ffff;
+            --string-color: #00ffff;
+        }
+
+        #hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .hud-item {
+            color: rgba(255, 255, 255, 0.8);
+            margin-bottom: 8px;
+            font-size: 14px;
+            text-shadow: 0 0 5px #00ffff;
+        }
+        
+        .hand-status {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: rgba(0,0,0,0.5);
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: cyan;
+            font-size: 20px;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse { 0% { opacity: 0.5; } 100% { opacity: 1; } }
+        
+        #input-video { display: none; }
+    </style>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.17.0/dist/lil-gui.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+<div id="loading">初始化神经连接...<br><span style="font-size:12px">请授予摄像头权限</span></div>
+
+<div id="hud">
+    <div class="hud-item" style="font-size: 18px; font-weight: bold; border-bottom: 1px solid cyan; padding-bottom:5px; margin-bottom:15px;">COSMIC ARCHITECT</div>
+    <div class="hud-item">🤚 左手 (Shape): <span id="status-left" class="hand-status">未检测</span></div>
+    <div class="hud-item">✋ 右手 (Scale): <span id="status-right" class="hand-status">未检测</span></div>
+    <div class="hud-item">✨ 当前形态: <span id="status-shape" style="color:#ffff00">等待指令</span></div>
+</div>
+
+<video id="input-video"></video>
+<audio id="bgm" loop>
+    <source src="https://cdn.pixabay.com/download/audio/2022/03/10/audio_c8c8a73467.mp3?filename=cosmic-glow-14282.mp3" type="audio/mp3">
+</audio>
+
+<script>
+    // ================= 配置参数 (UI控制对象) =================
+    const params = {
+        particleCount: 30000,
+        particleSize: 6.0,
+        baseHue: 0.6, // 蓝色基调
+        colorSpeed: 0.2,
+        expansion: 1.0, // 动态缩放系数
+        shape: 'Heart', // 当前形状
+        autoRotate: true,
+        music: false
+    };
+
+    const shapesList = ['BlackHole', 'Spiral', 'Infinity', 'Butterfly', 'Rose', 'Heart'];
+
+    // ================= 1. Three.js 场景构建 =================
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x000000, 0.0005);
+
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 20000);
+    camera.position.z = 1000;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    document.body.appendChild(renderer.domElement);
+
+    // ================= 2. 粒子系统 (支持动态数量) =================
+    const maxParticles = 50000; // 预分配最大内存
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(maxParticles * 3);
+    const targetPositions = new Float32Array(maxParticles * 3);
+    const colors = new Float32Array(maxParticles * 3);
+    const sizes = new Float32Array(maxParticles); // 增加大小变体
+
+    const colorObj = new THREE.Color();
+
+    // 初始化所有粒子
+    for (let i = 0; i < maxParticles; i++) {
+        positions[i * 3] = (Math.random() - 0.5) * 2000;
+        positions[i * 3 + 1] = (Math.random() - 0.5) * 1000;
+        positions[i * 3 + 2] = (Math.random() - 0.5) * 500;
+        targetPositions[i*3] = positions[i*3];
+        sizes[i] = Math.random(); // 0-1 之间的随机系数
+    }
+
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geometry.setAttribute('sizeScale', new THREE.BufferAttribute(sizes, 1));
+    geometry.setDrawRange(0, params.particleCount); // 初始绘制数量
+
+    // 生成纹理
+    function getTexture() {
+        const c = document.createElement('canvas');
+        c.width = 32; c.height = 32;
+        const ctx = c.getContext('2d');
+        const g = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+        g.addColorStop(0, 'rgba(255,255,255,1)');
+        g.addColorStop(0.2, 'rgba(150,220,255,0.6)');
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0,0,32,32);
+        return new THREE.Texture(c);
+    }
+    const texture = getTexture();
+    texture.needsUpdate = true;
+
+    const material = new THREE.PointsMaterial({
+        size: params.particleSize,
+        map: texture,
+        vertexColors: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        transparent: true,
+        opacity: 0.8
+    });
+
+    const particles = new THREE.Points(geometry, material);
+    scene.add(particles);
+
+    // ================= 3. UI 面板 (lil-gui) =================
+    const gui = new lil.GUI({ title: '控制面板' });
+    
+    // 形状控制
+    gui.add(params, 'shape', shapesList).name('当前形状').listen().onChange(updateTargets);
+    
+    const folderVisual = gui.addFolder('视觉参数');
+    folderVisual.add(params, 'particleCount', 1000, 50000, 100).name('粒子数量').onChange(v => {
+        geometry.setDrawRange(0, v);
+    });
+    folderVisual.add(params, 'particleSize', 1, 20).name('粒子大小').onChange(v => material.size = v);
+    folderVisual.addColor({ color: '#00ffff' }, 'color').name('基调颜色').onChange(c => {
+        const tempColor = new THREE.Color(c);
+        const hsl = {};
+        tempColor.getHSL(hsl);
+        params.baseHue = hsl.h;
+    });
+    folderVisual.add(params, 'colorSpeed', 0, 2).name('色彩流转速度');
+    
+    const folderPhysics = gui.addFolder('物理与控制');
+    folderPhysics.add(params, 'expansion', 0.1, 3.0).name('缩放比例').listen(); // 监听右手
+    folderPhysics.add(params, 'autoRotate').name('自动微旋');
+    folderPhysics.add(params, 'music').name('背景音乐').onChange(v => {
+        const a = document.getElementById('bgm');
+        v ? a.play() : a.pause();
+    });
+
+    // ================= 4. 数学形态生成 (正面视图) =================
+    function getShapePos(shapeName, i) {
+        const t = (i / params.particleCount) * Math.PI * 2;
+        const rnd = (Math.random() - 0.5);
+        let x=0, y=0, z=0;
+
+        switch (shapeName) {
+            case 'BlackHole': // 0指
+                const r = 150 * Math.random(); 
+                const theta = Math.random() * Math.PI * 2;
+                x = r * Math.cos(theta);
+                y = r * Math.sin(theta);
+                z = rnd * 20; 
+                break;
+            case 'Spiral': // 1指
+                const sR = 30 * Math.sqrt(i);
+                const sA = i * 0.1;
+                x = sR * Math.cos(sA) * 0.5;
+                y = sR * Math.sin(sA) * 0.5;
+                z = rnd * 50;
+                break;
+            case 'Infinity': // 2指
+                const lt = t * 20;
+                const den = 1 + Math.sin(lt)**2;
+                const scale = 400;
+                x = scale * Math.cos(lt) / den;
+                y = scale * Math.sin(lt) * Math.cos(lt) / den;
+                z = rnd * 80;
+                break;
+            case 'Butterfly': // 3指
+                const bt = t * 12;
+                const br = 180 * (Math.exp(Math.cos(bt)) - 2*Math.cos(4*bt) - Math.pow(Math.sin(bt/12),5));
+                x = br * Math.sin(bt);
+                y = br * Math.cos(bt);
+                z = rnd * 100;
+                break;
+            case 'Rose': // 4指
+                const k = 6;
+                const rr = 450 * Math.cos(k * t * 2);
+                x = rr * Math.cos(t * 2);
+                y = rr * Math.sin(t * 2);
+                z = Math.sin(t*10)*50 + rnd*50;
+                break;
+            case 'Heart': // 5指
+            default:
+                const ht = t * 2;
+                x = 16 * 16 * Math.pow(Math.sin(ht), 3);
+                y = 16 * (13 * Math.cos(ht) - 5 * Math.cos(2*ht) - 2 * Math.cos(3*ht) - Math.cos(4*ht));
+                z = rnd * 150 * (1 - Math.abs(x)/400);
+                break;
+        }
+        return {x, y, z};
+    }
+
+    function updateTargets() {
+        document.getElementById('status-shape').innerText = params.shape;
+        for (let i = 0; i < maxParticles; i++) {
+            const pos = getShapePos(params.shape, i);
+            targetPositions[i * 3] = pos.x;
+            targetPositions[i * 3 + 1] = pos.y;
+            targetPositions[i * 3 + 2] = pos.z;
+        }
+    }
+    
+    // 初始调用
+    updateTargets();
+
+    // ================= 5. MediaPipe 双手逻辑 =================
+    let rightHandPinch = false;
+    let rightHandCenter = new THREE.Vector3(0,0,0);
+    
+    function onResults(results) {
+        document.getElementById('loading').style.display = 'none';
+        
+        let leftHandDetected = false;
+        let rightHandDetected = false;
+
+        if (results.multiHandLandmarks) {
+            for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+                const landmarks = results.multiHandLandmarks[i];
+                const label = results.multiHandedness[i].label; // "Left" or "Right"
+
+                // 核心：区分左右手功能
+                // 注意：MediaPipe 默认自拍镜像。label "Left" 实际上是画面左边那只手（用户的右手）。
+                // 为了直观，我们定义：画面左侧的手 = 形状 (Shape)，画面右侧的手 = 物理 (Physics)
+                const cx = landmarks[9].x; // 0-1, 0 is left
+
+                if (label === 'Right') { 
+                    // 这里是反直觉的：MediaPipe 'Right' 通常显示在画面左侧（因为镜像）。
+                    // 我们把这只手作为【左手逻辑-控制形状】(假设用户举起左手，屏幕显示在左边)
+                    leftHandDetected = true;
+                    handleLeftHand(landmarks);
+                } else {
+                    // MediaPipe 'Left' -> 画面右侧 -> 【右手逻辑-控制缩放】
+                    rightHandDetected = true;
+                    handleRightHand(landmarks);
+                }
+            }
+        }
+
+        document.getElementById('status-left').innerText = leftHandDetected ? "活跃" : "未检测";
+        document.getElementById('status-left').style.color = leftHandDetected ? "#00ff00" : "#555";
+        
+        document.getElementById('status-right').innerText = rightHandDetected ? "活跃" : "未检测";
+        document.getElementById('status-right').style.color = rightHandDetected ? "#00ff00" : "#555";
+        
+        if (!rightHandDetected) {
+            rightHandPinch = false; // 重置捏合
+            // 缓慢恢复默认缩放
+            params.expansion += (1.0 - params.expansion) * 0.05;
+        }
+    }
+
+    // 左手：数手指 -> 切换形状
+    function handleLeftHand(landmarks) {
+        let count = 0;
+        // 简单计数逻辑 Y轴比较
+        if (landmarks[8].y < landmarks[6].y) count++;
+        if (landmarks[12].y < landmarks[10].y) count++;
+        if (landmarks[16].y < landmarks[14].y) count++;
+        if (landmarks[20].y < landmarks[18].y) count++;
+        if (landmarks[4].x < landmarks[3].x) count++; // 拇指X轴
+
+        // 映射 0-5 到形状列表
+        const targetShape = shapesList[Math.min(count, 5)];
+        
+        // 只有当形状真正改变时才更新，避免闪烁
+        if (targetShape !== params.shape) {
+            params.shape = targetShape;
+            updateTargets();
+        }
+        document.getElementById('status-left').innerText = `手指:${count} (${targetShape})`;
+    }
+
+    // 右手：计算张开度 -> 缩放; 捏合 -> 引力中心
+    function handleRightHand(landmarks) {
+        // 1. 计算手掌张开程度 (拇指尖到小指尖的距离)
+        const dx = landmarks[4].x - landmarks[20].x;
+        const dy = landmarks[4].y - landmarks[20].y;
+        const spread = Math.sqrt(dx*dx + dy*dy); // 范围大概 0.1 - 0.5
+        
+        // 映射 spread 到 expansion (0.5 - 2.5)
+        const targetScale = Math.max(0.2, Math.min(spread * 6, 3.0));
+        // 平滑过渡
+        params.expansion += (targetScale - params.expansion) * 0.1;
+
+        // 2. 检测捏合 (黑洞触发)
+        const pinchDist = Math.hypot(landmarks[4].x - landmarks[8].x, landmarks[4].y - landmarks[8].y);
+        rightHandPinch = pinchDist < 0.05;
+        
+        // 3. 更新右手中心点 (映射到3D空间)
+        // MediaPipe coords: 0-1. ThreeJS view: -Width/2 to Width/2
+        const handX = (1 - landmarks[9].x) * 2 - 1; // Flip X
+        const handY = -(landmarks[9].y * 2 - 1);
+        rightHandCenter.set(handX * 800, handY * 600, 0);
+
+        const statusText = rightHandPinch ? "!!! 引力坍缩 !!!" : `缩放: ${(params.expansion).toFixed(1)}x`;
+        document.getElementById('status-right').innerText = statusText;
+        document.getElementById('status-right').style.color = rightHandPinch ? "red" : "#00ff00";
+    }
+
+    const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+    hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+    hands.onResults(onResults);
+
+    const cameraUtils = new Camera(document.getElementById('input-video'), {
+        onFrame: async () => await hands.send({image: document.getElementById('input-video')}),
+        width: 640, height: 480
+    });
+    cameraUtils.start();
+
+
+    // ================= 6. 动画主循环 =================
+    const clock = new THREE.Clock();
+    
+    function animate() {
+        requestAnimationFrame(animate);
+        const time = Date.now() * 0.0005 * params.colorSpeed;
+        const posAttr = geometry.attributes.position;
+        const colAttr = geometry.attributes.color;
+
+        for (let i = 0; i < params.particleCount; i++) {
+            let px = posAttr.array[i*3];
+            let py = posAttr.array[i*3+1];
+            let pz = posAttr.array[i*3+2];
+
+            let tx = targetPositions[i*3];
+            let ty = targetPositions[i*3+1];
+            let tz = targetPositions[i*3+2];
+
+            // 1. 应用右手缩放
+            tx *= params.expansion;
+            ty *= params.expansion;
+            tz *= params.expansion;
+
+            // 2. 物理插值移动
+            if (rightHandPinch) {
+                // 黑洞模式：无视形状，全部飞向右手中心
+                const speed = 0.1 + Math.random() * 0.05;
+                px += (rightHandCenter.x - px) * speed;
+                py += (rightHandCenter.y - py) * speed;
+                pz += (rightHandCenter.z - pz) * speed;
+            } else {
+                // 正常模式：飞向数学形状目标
+                // 增加一点 Z 轴上的正弦波动，模拟呼吸
+                const breathing = Math.sin(time * 2 + i) * 10 * params.expansion;
+                
+                px += (tx - px) * 0.05;
+                py += (ty - py) * 0.05;
+                pz += (tz + breathing - pz) * 0.05;
+            }
+
+            posAttr.array[i*3] = px;
+            posAttr.array[i*3+1] = py;
+            posAttr.array[i*3+2] = pz;
+
+            // 3. 颜色更新
+            const dist = Math.sqrt(px*px + py*py);
+            // 基础色调 + 根据位置变化的色调 + 随机闪烁
+            let h = params.baseHue + (dist / 1500) * 0.2;
+            if (rightHandPinch) h = 0.0; // 红色警告
+
+            colorObj.setHSL(h % 1, 0.8, rightHandPinch ? 0.8 : 0.6);
+            colAttr.array[i*3] = colorObj.r;
+            colAttr.array[i*3+1] = colorObj.g;
+            colAttr.array[i*3+2] = colorObj.b;
+        }
+
+        posAttr.needsUpdate = true;
+        colAttr.needsUpdate = true;
+
+        if (params.autoRotate && !rightHandPinch) {
+            particles.rotation.y = Math.sin(time * 0.5) * 0.1; // 轻微摆动而非旋转
+            particles.rotation.x = Math.cos(time * 0.3) * 0.05;
+        } else {
+            particles.rotation.set(0,0,0);
+        }
+
+        renderer.render(scene, camera);
+    }
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    animate();
+
+</script>
+</body>
+</html>

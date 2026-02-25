@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>Cosmic Math Vortex - Three.js</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 20px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.8);
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 14px;
+            pointer-events: none;
+            z-index: 10;
+            text-shadow: 0 0 10px #00ffff;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="info">正在演算: <span id="shape-name">宇宙混沌 (Cosmic Chaos)</span></div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // --- 配置参数 ---
+        const PARTICLE_COUNT = 40000; // 粒子数量，可根据电脑性能调整
+        const PARTICLE_SIZE = 0.15;   // 粒子大小
+        const MORPH_SPEED = 0.04;     // 变形速度 (0.01 - 0.1)
+        const CHANGE_INTERVAL = 4000; // 切换形状的时间间隔 (毫秒)
+
+        // --- 全局变量 ---
+        let scene, camera, renderer, composer;
+        let particles, geometry;
+        let positions, currentPositions, targetPositions;
+        let clock = new THREE.Clock();
+        let currentShape = 0;
+        
+        // 形状名称列表
+        const shapes = [
+            { name: "宇宙漩涡 (Cosmic Vortex)", func: getGalaxyShape },
+            { name: "阿基米德螺旋 (Archimedean)", func: getArchimedeanSpiral },
+            { name: "伯努利双扭线 (Lemniscate)", func: getLemniscate },
+            { name: "蝴蝶曲线 (Butterfly)", func: getButterfly },
+            { name: "玫瑰曲线 (Rose Curve)", func: getRoseCurve },
+            { name: "悬链线曲面 (Catenary)", func: getCatenarySurface },
+            { name: "心形线 (Cardioid)", func: getCardioid },
+            { name: "分形星云 (Fractal Nebula)", func: getSphereVolume } // 模拟科赫复杂度的球体
+        ];
+
+        init();
+        animate();
+
+        function init() {
+            // 1. 场景设置
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x000000, 0.002); // 黑色迷雾，增加深邃感
+
+            camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 1, 2000);
+            camera.position.z = 100;
+            camera.position.y = 20;
+
+            renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.body.appendChild(renderer.domElement);
+
+            // 2. 轨道控制器
+            const controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 0.5;
+
+            // 3. 粒子系统初始化
+            geometry = new THREE.BufferGeometry();
+            
+            // 初始化数组
+            positions = new Float32Array(PARTICLE_COUNT * 3);
+            currentPositions = new Float32Array(PARTICLE_COUNT * 3);
+            targetPositions = new Float32Array(PARTICLE_COUNT * 3);
+            const colors = new Float32Array(PARTICLE_COUNT * 3);
+
+            // 初始颜色设置 (蓝紫色调，模拟星空)
+            const color1 = new THREE.Color(0x00ffff); // 青色
+            const color2 = new THREE.Color(0xff00ff); // 紫色
+            
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                // 初始位置随机
+                currentPositions[i * 3] = (Math.random() - 0.5) * 200;
+                currentPositions[i * 3 + 1] = (Math.random() - 0.5) * 200;
+                currentPositions[i * 3 + 2] = (Math.random() - 0.5) * 200;
+
+                // 颜色混合
+                const mixedColor = color1.clone().lerp(color2, Math.random());
+                colors[i * 3] = mixedColor.r;
+                colors[i * 3 + 1] = mixedColor.g;
+                colors[i * 3 + 2] = mixedColor.b;
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(currentPositions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            // 粒子材质 - 使用 AdditiveBlending 实现光叠加
+            const material = new THREE.PointsMaterial({
+                size: PARTICLE_SIZE,
+                vertexColors: true,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+                transparent: true,
+                opacity: 0.8
+            });
+
+            // 生成简单的圆形纹理作为粒子，避免方块感
+            const canvas = document.createElement('canvas');
+            canvas.width = 32; canvas.height = 32;
+            const ctx = canvas.getContext('2d');
+            const grad = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+            grad.addColorStop(0, 'rgba(255,255,255,1)');
+            grad.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, 32, 32);
+            const texture = new THREE.CanvasTexture(canvas);
+            material.map = texture;
+
+            particles = new THREE.Points(geometry, material);
+            scene.add(particles);
+
+            // 4. 后处理 (Bloom/Glow Effect)
+            const renderScene = new RenderPass(scene, camera);
+            const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+            bloomPass.threshold = 0;
+            bloomPass.strength = 1.2; // 辉光强度
+            bloomPass.radius = 0.5;
+
+            composer = new EffectComposer(renderer);
+            composer.addPass(renderScene);
+            composer.addPass(bloomPass);
+
+            // 5. 事件监听
+            window.addEventListener('resize', onWindowResize);
+
+            // 6. 启动形状变换循环
+            calculateTargetShape(0); // 初始形状
+            setInterval(nextShape, CHANGE_INTERVAL);
+        }
+
+        // --- 数学形状生成函数 ---
+
+        // 1. 宇宙漩涡 (Galaxy)
+        function getGalaxyShape(i) {
+            const angle = i * 0.1;
+            const radius = 10 + i * 0.005;
+            // 加上一些随机散布，模拟星系臂
+            const arm = i % 3; 
+            const spread = (Math.random() - 0.5) * 10;
+            
+            const x = Math.cos(angle + arm * (Math.PI * 2 / 3)) * radius + spread;
+            const y = (Math.random() - 0.5) * (radius * 0.2); // 扁平化
+            const z = Math.sin(angle + arm * (Math.PI * 2 / 3)) * radius + spread;
+            return {x, y, z};
+        }
+
+        // 2. 阿基米德螺旋 (Archimedean) - 扩展为3D圆锥状
+        function getArchimedeanSpiral(i) {
+            const t = i * 0.05; 
+            const r = 0.5 * t;
+            const x = r * Math.cos(t);
+            const z = r * Math.sin(t);
+            const y = i * 0.002 - 40; // 拉伸高度
+            return {x, y, z};
+        }
+
+        // 3. 伯努利双扭线 (Lemniscate)
+        function getLemniscate(i) {
+            const t = (i / PARTICLE_COUNT) * Math.PI * 2;
+            const scale = 60;
+            const denom = 1 + Math.sin(t) * Math.sin(t);
+            const x = scale * Math.cos(t) / denom;
+            const z = 0;
+            const y = scale * Math.sin(t) * Math.cos(t) / denom;
+            
+            // 增加3D厚度
+            const randOffset = (Math.random() - 0.5) * 5;
+            return { x: x + randOffset, y: y + randOffset, z: (Math.random()-0.5) * 15 };
+        }
+
+        // 4. 蝴蝶曲线 (Butterfly Curve)
+        function getButterfly(i) {
+            const t = (i / PARTICLE_COUNT) * 12 * Math.PI; // 多圈
+            const scale = 15;
+            // 蝴蝶曲线参数方程
+            const r = Math.exp(Math.cos(t)) - 2 * Math.cos(4 * t) + Math.pow(Math.sin(t / 12), 5);
+            
+            const x = scale * r * Math.sin(t);
+            const y = scale * r * Math.cos(t);
+            const z = (Math.random() - 0.5) * 10; // 稍微有点厚度
+            return {x, y, z};
+        }
+
+        // 5. 玫瑰曲线 (Rose Curve) - 3D版
+        function getRoseCurve(i) {
+            const k = 4; // 花瓣数
+            const t = (i / PARTICLE_COUNT) * Math.PI * 2 * 10; // 这里的10是为了多绕几圈填满
+            const scale = 40;
+            const r = Math.cos(k * t) * scale;
+            const x = r * Math.cos(t);
+            const y = r * Math.sin(t);
+            // 让其在Z轴上也稍微波动，形成花球感
+            const z = Math.sin(t * 5) * 10; 
+            return {x, y, z};
+        }
+
+        // 6. 悬链线 (Catenary) - 形成帐篷状
+        function getCatenarySurface(i) {
+            const totalLines = 50;
+            const pointsPerLine = PARTICLE_COUNT / totalLines;
+            const lineIndex = Math.floor(i / pointsPerLine);
+            const pointIndex = i % pointsPerLine;
+            
+            const xVal = (pointIndex / pointsPerLine - 0.5) * 60;
+            const a = 10; // 悬链系数
+            const yVal = a * Math.cosh(xVal / a) - 40;
+            
+            // 绕Y轴旋转形成面
+            const angle = (lineIndex / totalLines) * Math.PI * 2;
+            
+            const x = xVal * Math.cos(angle);
+            const z = xVal * Math.sin(angle);
+            const y = yVal;
+            
+            return {x, y, z};
+        }
+
+        // 7. 心形线 (Cardioid) - 3D旋转体
+        function getCardioid(i) {
+            const t = (i / PARTICLE_COUNT) * Math.PI * 100; // 密集填充
+            const phi = (i / PARTICLE_COUNT) * Math.PI * 2; // 旋转角
+            
+            const a = 2; 
+            const r = 20 * (1 - Math.sin(t)); // 心形极坐标
+            
+            // 转换为3D
+            const x = r * Math.cos(t) * Math.sin(phi) + (Math.random()-0.5);
+            const y = r * Math.sin(t) + 20;
+            const z = r * Math.cos(t) * Math.cos(phi) + (Math.random()-0.5);
+            
+            return {x, y, z};
+        }
+
+        // 8. 混沌球/分形 (模拟科赫/混乱)
+        function getSphereVolume(i) {
+            // 使用球体均匀分布，但加入高频噪声模拟分形边缘
+            const radius = 40;
+            const u = Math.random();
+            const v = Math.random();
+            const theta = 2 * Math.PI * u;
+            const phi = Math.acos(2 * v - 1);
+            
+            let x = radius * Math.sin(phi) * Math.cos(theta);
+            let y = radius * Math.sin(phi) * Math.sin(theta);
+            let z = radius * Math.cos(phi);
+            
+            // 加入噪点，模拟“刺”或分形结构
+            if (i % 3 === 0) {
+                x *= 1.5; y *= 1.5; z *= 1.5;
+            }
+            return {x, y, z};
+        }
+
+        // --- 核心逻辑 ---
+
+        function nextShape() {
+            currentShape = (currentShape + 1) % shapes.length;
+            document.getElementById('shape-name').innerText = shapes[currentShape].name;
+            calculateTargetShape(currentShape);
+        }
+
+        function calculateTargetShape(shapeIndex) {
+            const func = shapes[shapeIndex].func;
+            
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const pos = func(i);
+                targetPositions[i * 3] = pos.x;
+                targetPositions[i * 3 + 1] = pos.y;
+                targetPositions[i * 3 + 2] = pos.z;
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const time = Date.now() * 0.001;
+            const positionsArray = geometry.attributes.position.array;
+
+            // 粒子插值移动逻辑 (Morphing)
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const px = i * 3;
+                const py = i * 3 + 1;
+                const pz = i * 3 + 2;
+
+                // 简单的线性插值 (Lerp) 加上一点噪点摆动
+                positionsArray[px] += (targetPositions[px] - positionsArray[px]) * MORPH_SPEED;
+                positionsArray[py] += (targetPositions[py] - positionsArray[py]) * MORPH_SPEED;
+                positionsArray[pz] += (targetPositions[pz] - positionsArray[pz]) * MORPH_SPEED;
+                
+                // 增加一点微小的混沌震动，使粒子看起来是活的
+                /* if(Math.random() > 0.95) {
+                    positionsArray[px] += (Math.random() - 0.5) * 0.1;
+                    positionsArray[py] += (Math.random() - 0.5) * 0.1;
+                    positionsArray[pz] += (Math.random() - 0.5) * 0.1;
+                }
+                */
+            }
+            
+            geometry.attributes.position.needsUpdate = true;
+
+            // 整体缓慢旋转
+            particles.rotation.y += 0.002;
+            particles.rotation.z += 0.001;
+
+            // 颜色动态变化 (Hue Shift)
+            const hue = (time * 0.05) % 1;
+            const colorAttr = geometry.attributes.color;
+            // 我们可以选择只更新部分颜色或整体色调偏移，这里为了性能保持静态渐变，
+            // 若需动态变色，需在循环中更新 colorAttr 并设 needsUpdate = true (开销较大)
+
+            // 渲染
+            composer.render();
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>联系公主 Contact Her Highness</title>
+    <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@700&family=Playfair+Display:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #fff0f5; 
+            --card-bg: rgba(255, 255, 255, 0.85);
+            --primary-text: #8e5e6a;
+            --accent-gold: #eebf68;
+            --hover-pink: #ffdde1;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: 'Playfair Display', serif;
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(255, 192, 203, 0.3) 0%, transparent 20%),
+                radial-gradient(circle at 90% 80%, rgba(255, 215, 0, 0.15) 0%, transparent 20%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: var(--primary-text);
+            padding: 20px;
+        }
+
+        .back-btn {
+            position: fixed;
+            top: 30px;
+            left: 30px;
+            text-decoration: none;
+            color: var(--primary-text);
+            font-size: 1.1rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 20px;
+            background: white;
+            border-radius: 30px;
+            box-shadow: 0 4px 15px rgba(164, 79, 110, 0.1);
+            transition: all 0.3s ease;
+            z-index: 100;
+            border: 1px solid transparent;
+        }
+
+        .back-btn:hover {
+            transform: translateX(-5px);
+            border-color: var(--hover-pink);
+            background: #fffafa;
+            color: #d87093;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 600px;
+            background: var(--card-bg);
+            backdrop-filter: blur(10px);
+            border-radius: 40px;
+            padding: 50px 30px;
+            box-shadow: 
+                0 20px 50px rgba(164, 79, 110, 0.15),
+                inset 0 0 0 2px white;
+            border: 6px solid #fae6fa;
+            text-align: center;
+            position: relative;
+        }
+
+        .container::before {
+            content: '🎀';
+            position: absolute;
+            top: -25px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 3rem;
+            filter: drop-shadow(0 5px 5px rgba(0,0,0,0.1));
+        }
+
+        h1 {
+            font-family: 'Dancing Script', cursive;
+            font-size: 3rem;
+            margin-bottom: 10px;
+            background: linear-gradient(45deg, #d87093, #eebf68);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        p.subtitle {
+            font-size: 1rem;
+            margin-bottom: 40px;
+            color: #a67c8b;
+            font-style: italic;
+        }
+
+        .contact-list {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .contact-item {
+            background: white;
+            padding: 15px 20px;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            text-decoration: none;
+            color: var(--primary-text);
+            border: 1px solid #ffeef2;
+            transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .contact-item:hover {
+            transform: translateY(-3px) scale(1.02);
+            box-shadow: 0 10px 20px rgba(255, 182, 193, 0.3);
+            border-color: var(--accent-gold);
+        }
+
+        /* 待开放项目的特殊样式 */
+        .contact-item.pending {
+            background: #fafafa;
+            border-style: dashed;
+            opacity: 0.8;
+        }
+        .contact-item.pending:hover {
+            border-color: #ddd;
+            transform: translateY(-2px);
+        }
+
+        .contact-left {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .icon-box {
+            width: 45px;
+            height: 45px;
+            background: #fff0f5;
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 1.4rem;
+        }
+        
+        /* 单独给待开放的图标换个颜色 */
+        .pending .icon-box {
+            background: #f0f0f0;
+            color: #ccc;
+        }
+
+        .contact-info h3 {
+            font-size: 1.1rem;
+            font-weight: 700;
+        }
+
+        .contact-info span {
+            font-size: 0.9rem;
+            color: #b08d9a;
+        }
+
+        .action-arrow {
+            color: #eebf68;
+            font-size: 1.2rem;
+            opacity: 0.5;
+            transition: 0.3s;
+        }
+
+        .contact-item:hover .action-arrow {
+            opacity: 1;
+            transform: translateX(5px);
+        }
+
+        #toast {
+            visibility: hidden;
+            min-width: 250px;
+            background-color: #fff;
+            color: #d87093;
+            text-align: center;
+            border-radius: 50px;
+            padding: 16px;
+            position: fixed;
+            z-index: 101;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            border: 2px solid #ffdde1;
+            font-weight: bold;
+            opacity: 0;
+            transition: opacity 0.3s, bottom 0.3s;
+        }
+
+        #toast.show {
+            visibility: visible;
+            opacity: 1;
+            bottom: 50px;
+        }
+
+        .sparkles {
+            margin-top: 30px;
+            font-size: 1.5rem;
+            letter-spacing: 10px;
+            opacity: 0.6;
+        }
+
+    </style>
+</head>
+<body>
+
+    <a href="https://xiaopy.dpdns.org/" class="back-btn">
+        <span>⬅</span> Return to Castle
+    </a>
+
+    <div class="container">
+        <h1>Royal Reception</h1>
+        <p class="subtitle">请选择您喜欢的方式与我联络</p>
+
+        <div class="contact-list">
+            
+            <!-- 1. 电话 (Hotline) -->
+            <a href="tel:13228694870" class="contact-item">
+                <div class="contact-left">
+                    <div class="icon-box">📞</div>
+                    <div class="contact-info">
+                        <h3>Hotline / 电话</h3>
+                        <span>点击联系公主</span>
+                    </div>
+                </div>
+                <div class="action-arrow">➤</div>
+            </a>
+
+            <!-- 2. 邮箱 (Email) - 点击复制模式 -->
+            <div class="contact-item" onclick="copyToClipboard('youzhi520zx@outlook.com', '邮箱地址已复制 💌')">
+                <div class="contact-left">
+                    <div class="icon-box">💌</div>
+                    <div class="contact-info">
+                        <h3>Royal Mail / 邮箱</h3>
+                        <span>点击复制邮箱</span>
+                    </div>
+                </div>
+                <div class="action-arrow">✦</div>
+            </div>
+
+            <!-- 3. QQ - 点击复制模式 (请修改下方的QQ号) -->
+            <div class="contact-item" onclick="copyToClipboard('1327609120', 'QQ号已复制到剪贴板 🐧')">
+                <div class="contact-left">
+                    <div class="icon-box">🐧</div>
+                    <div class="contact-info">
+                        <h3>QQ Messenger</h3>
+                        <span>点击复制 QQ 号码</span> <!-- 这里可以改成显示你的QQ号 -->
+                    </div>
+                </div>
+                <div class="action-arrow">✦</div>
+            </div>
+
+            <!-- 4. 微信 (WeChat) - 点击复制模式 -->
+            <div class="contact-item" onclick="copyToClipboard('HanSusu-520', '微信号已复制 ✨')">
+                <div class="contact-left">
+                    <div class="icon-box">💬</div>
+                    <div class="contact-info">
+                        <h3>WeChat / 微信</h3>
+                        <span>点击复制微信号码</span>
+                    </div>
+                </div>
+                <div class="action-arrow">✦</div>
+            </div>
+
+            <!-- 5. Instagram - 跳转模式 -->
+            <a href="https://www.instagram.com/youzhi520zx/" target="_blank" class="contact-item">
+                <div class="contact-left">
+                    <div class="icon-box">📸</div>
+                    <div class="contact-info">
+                        <h3>Instagram</h3>
+                        <span>点击进入ins主页</span>
+                    </div>
+                </div>
+                <div class="action-arrow">➤</div>
+            </a>
+
+            <!-- 6. 待开放 (Coming Soon) -->
+            <div class="contact-item pending" onclick="showToast('魔法正在酝酿中，敬请期待 🔮')">
+                <div class="contact-left">
+                    <div class="icon-box">🔮</div>
+                    <div class="contact-info">
+                        <h3 style="color: #aaa;">Secret Channel</h3>
+                        <span style="color: #ccc;">Coming Soon...</span>
+                    </div>
+                </div>
+                <div class="action-arrow" style="opacity: 0.2;">🔒</div>
+            </div>
+
+        </div>
+
+        <div class="sparkles">✨ ✨ ✨</div>
+    </div>
+
+    <!-- 提示弹窗 -->
+    <div id="toast">已成功复制 ✨</div>
+
+    <script>
+        // 通用复制功能
+        function copyToClipboard(text, successMessage) {
+            navigator.clipboard.writeText(text).then(function() {
+                showToast(successMessage);
+            }, function(err) {
+                console.error('无法复制: ', err);
+                showToast('复制失败，请手动复制');
+            });
+        }
+
+        // 显示提示框
+        function showToast(message) {
+            var x = document.getElementById("toast");
+            x.innerText = message;
+            x.className = "show";
+            setTimeout(function(){ x.className = x.className.replace("show", ""); }, 3000);
+        }
+    </script>
+
+</body>
+</html>

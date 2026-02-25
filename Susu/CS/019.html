@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Chaotic Universe Hand Control</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', sans-serif; }
+        
+        #video-input {
+            position: absolute;
+            width: 1px; height: 1px;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ffffff;
+            font-size: 1.2rem;
+            letter-spacing: 4px;
+            text-shadow: 0 0 20px #ffffff;
+            pointer-events: none;
+            transition: opacity 0.8s;
+        }
+
+        /* 状态指示器 */
+        #gesture-indicator {
+            position: absolute;
+            bottom: 40px;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            pointer-events: none;
+        }
+        
+        .indicator {
+            background: rgba(10, 10, 10, 0.7);
+            border: 1px solid rgba(255,255,255,0.15);
+            padding: 15px 30px;
+            border-radius: 40px;
+            color: rgba(255,255,255,0.3);
+            font-size: 0.9rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            backdrop-filter: blur(10px);
+        }
+        
+        .indicator span { font-size: 1.5rem; }
+        
+        .indicator.active {
+            color: #fff;
+            border-color: rgba(255,255,255,0.8);
+            transform: scale(1.1);
+            box-shadow: 0 0 30px rgba(255,255,255,0.2);
+        }
+
+        /* 颜色区分 */
+        #ind-open.active { 
+            background: linear-gradient(90deg, rgba(0,255,200,0.1), rgba(0,100,255,0.1));
+            border-color: #00ffcc;
+            color: #00ffcc;
+            box-shadow: 0 0 40px rgba(0,255,204,0.4);
+        }
+        #ind-grab.active { 
+            background: linear-gradient(90deg, rgba(255,0,100,0.1), rgba(255,100,0,0.1));
+            border-color: #ff0055;
+            color: #ff0055;
+            box-shadow: 0 0 40px rgba(255,0,85,0.4);
+        }
+
+    </style>
+</head>
+<body>
+
+<video id="video-input" autoplay playsinline></video>
+
+<div id="loading">GENERATING UNIVERSE...</div>
+
+<div id="gesture-indicator">
+    <div id="ind-open" class="indicator"><span>🖐️</span> DIFFUSION (Chaos)</div>
+    <div id="ind-grab" class="indicator"><span>✊</span> GRAVITY (Order)</div>
+</div>
+
+<script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+      "lil-gui": "https://unpkg.com/lil-gui@0.18.0/dist/lil-gui.esm.min.js",
+      "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/+esm"
+    }
+  }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { GUI } from 'lil-gui';
+import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
+
+// --- 配置参数 ---
+const PARTICLE_COUNT = 100000; // 宏大的粒子量
+const CAM_Z = 100;
+
+const params = {
+    color1: '#00ccff', // 亮青色
+    color2: '#ffffff', // 纯白色
+    baseSize: 1.0,     // 基础大小
+    bloomStrength: 1.8,
+    bloomRadius: 0.8,
+    chaosSpeed: 0.5    // 混乱速度
+};
+
+// --- 全局变量 ---
+let scene, camera, renderer, composer;
+let geometry, material, points;
+let handLandmarker, videoElement;
+let clock = new THREE.Clock();
+let bloomPass;
+
+// 状态管理
+const state = {
+    hasHand: false,
+    handPos: new THREE.Vector3(999,999,999),
+    // 0 = Open (Chaos/Diffusion), 1 = Fist (Gravity/Order)
+    grabValue: 0, 
+    smoothGrab: 0 
+};
+
+// --- 1. 初始化 ---
+async function init() {
+    videoElement = document.getElementById("video-input");
+    await initVision();
+    initThree();
+    initUI();
+    document.getElementById('loading').style.opacity = 0;
+    animate();
+}
+
+// --- 2. 视觉模型 (MediaPipe) ---
+async function initVision() {
+    const vision = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+    );
+    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: {
+            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+            delegate: "GPU"
+        },
+        runningMode: "VIDEO",
+        numHands: 1
+    });
+    
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: "user" } });
+    videoElement.srcObject = stream;
+    
+    videoElement.addEventListener("loadeddata", async () => {
+        const predictLoop = async () => {
+            if (videoElement.currentTime > 0 && !videoElement.paused) {
+                 const results = await handLandmarker.detectForVideo(videoElement, performance.now());
+                 processHandData(results);
+            }
+            requestAnimationFrame(predictLoop);
+        };
+        predictLoop();
+    });
+}
+
+// 手势处理
+function processHandData(results) {
+    const indGrab = document.getElementById('ind-grab');
+    const indOpen = document.getElementById('ind-open');
+
+    if (results.landmarks && results.landmarks.length > 0) {
+        state.hasHand = true;
+        const lm = results.landmarks[0];
+        
+        // 映射手掌坐标
+        const x = (1.0 - lm[9].x) * 2 - 1; 
+        const y = -(lm[9].y * 2 - 1);
+        const vFOV = THREE.MathUtils.degToRad(60);
+        const height = 2 * Math.tan(vFOV / 2) * CAM_Z;
+        const width = height * (window.innerWidth / window.innerHeight);
+        
+        // 这里的 handPos 是引力中心
+        state.handPos.set(x * width / 2, y * height / 2, 0);
+        
+        // 握拳检测 (Fist Detection)
+        const wrist = lm[0];
+        const distSq = (p1, p2) => (p1.x - p2.x)**2 + (p1.y - p2.y)**2 + (p1.z - p2.z)**2;
+        
+        let curledCount = 0;
+        if (distSq(lm[8], wrist) < distSq(lm[5], wrist)) curledCount++; 
+        if (distSq(lm[12], wrist) < distSq(lm[9], wrist)) curledCount++; 
+        if (distSq(lm[16], wrist) < distSq(lm[13], wrist)) curledCount++; 
+        if (distSq(lm[20], wrist) < distSq(lm[17], wrist)) curledCount++; 
+
+        const isGrabbing = curledCount >= 3;
+        state.grabValue = isGrabbing ? 1 : 0;
+        
+        if(isGrabbing) {
+            indGrab.classList.add('active');
+            indOpen.classList.remove('active');
+        } else {
+            indOpen.classList.add('active');
+            indGrab.classList.remove('active');
+        }
+        
+    } else {
+        state.hasHand = false;
+        state.grabValue = 0; // 默认张开
+        indGrab.classList.remove('active');
+        indOpen.classList.remove('active');
+    }
+}
+
+// --- 3. Three.js 核心 ---
+function initThree() {
+    scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x000000, 0.005); // 增加雾气感
+    
+    camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1000);
+    camera.position.z = CAM_Z;
+    
+    renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+    
+    const renderScene = new RenderPass(scene, camera);
+    bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+    bloomPass.threshold = 0.0; // 让暗的粒子也能辉光
+    bloomPass.strength = params.bloomStrength;
+    bloomPass.radius = params.bloomRadius;
+    
+    composer = new EffectComposer(renderer);
+    composer.addPass(renderScene);
+    composer.addPass(bloomPass);
+    
+    createChaosUniverse();
+    
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        composer.setSize(window.innerWidth, window.innerHeight);
+    });
+}
+
+// --- 4. 粒子系统 (全屏混沌) ---
+function createChaosUniverse() {
+    geometry = new THREE.BufferGeometry();
+
+    const positions = new Float32Array(PARTICLE_COUNT * 3);
+    const sizes = new Float32Array(PARTICLE_COUNT); // 不规则大小
+    const randoms = new Float32Array(PARTICLE_COUNT); // 随机相位
+    
+    for(let i=0; i<PARTICLE_COUNT; i++) {
+        // 1. 生成初始位置：巨大的全屏盒子，没有任何形状
+        // 范围足够大，覆盖屏幕外
+        const range = 250; 
+        positions[i*3] = (Math.random() - 0.5) * range;
+        positions[i*3+1] = (Math.random() - 0.5) * range;
+        positions[i*3+2] = (Math.random() - 0.5) * range;
+        
+        // 2. 不规则大小：大部分是小的，极少数是大的
+        // Math.pow 让大粒子变少
+        sizes[i] = Math.random() * Math.random() * 4.0 + 0.5;
+        
+        randoms[i] = Math.random();
+    }
+
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+    geometry.setAttribute('random', new THREE.BufferAttribute(randoms, 1));
+    
+    material = new THREE.ShaderMaterial({
+        uniforms: {
+            uTime: { value: 0 },
+            uBaseSize: { value: params.baseSize * window.devicePixelRatio },
+            uColor1: { value: new THREE.Color(params.color1) },
+            uColor2: { value: new THREE.Color(params.color2) },
+            uHandPos: { value: new THREE.Vector3(0,0,0) },
+            uGrabFactor: { value: 0 }, // 0=Open(Chaos), 1=Fist(Attract)
+            uHasHand: { value: 0 },
+            uChaosSpeed: { value: params.chaosSpeed }
+        },
+        vertexShader: `
+            uniform float uTime;
+            uniform float uBaseSize;
+            uniform vec3 uColor1;
+            uniform vec3 uColor2;
+            uniform vec3 uHandPos;
+            uniform float uGrabFactor;
+            uniform float uHasHand;
+            uniform float uChaosSpeed;
+            
+            attribute float size;
+            attribute float random;
+            
+            varying vec3 vColor;
+            varying float vAlpha;
+            
+            // Simplex Noise
+            vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+            vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+            vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
+            vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+            float snoise(vec3 v) { const vec2 C = vec2(1.0/6.0, 1.0/3.0); const vec4 D = vec4(0.0, 0.5, 1.0, 2.0); vec3 i = floor(v + dot(v, C.yyy)); vec3 x0 = v - i + dot(i, C.xxx); vec3 g = step(x0.yzx, x0.xyz); vec3 l = 1.0 - g; vec3 i1 = min(g.xyz, l.zxy); vec3 i2 = max(g.xyz, l.zxy); vec3 x1 = x0 - i1 + C.xxx; vec3 x2 = x0 - i2 + C.yyy; vec3 x3 = x0 - D.yyy; i = mod289(i); vec4 p = permute(permute(permute(i.z + vec4(0.0, i1.z, i2.z, 1.0)) + i.y + vec4(0.0, i1.y, i2.y, 1.0)) + i.x + vec4(0.0, i1.x, i2.x, 1.0)); float n_ = 0.142857142857; vec3 ns = n_ * D.wyz - D.xzx; vec4 j = p - 49.0 * floor(p * ns.z * ns.z); vec4 x_ = floor(j * ns.z); vec4 y_ = floor(j - 7.0 * x_); vec4 x = x_ * ns.x + ns.yyyy; vec4 y = y_ * ns.x + ns.yyyy; vec4 h = 1.0 - abs(x) - abs(y); vec4 b0 = vec4(x.xy, y.xy); vec4 b1 = vec4(x.zw, y.zw); vec4 s0 = floor(b0) * 2.0 + 1.0; vec4 s1 = floor(b1) * 2.0 + 1.0; vec4 sh = -step(h, vec4(0.0)); vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy; vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww; vec3 p0 = vec3(a0.xy, h.x); vec3 p1 = vec3(a0.zw, h.y); vec3 p2 = vec3(a1.xy, h.z); vec3 p3 = vec3(a1.zw, h.w); vec4 norm = taylorInvSqrt(vec4(dot(p0, p0), dot(p1, p1), dot(p2, p2), dot(p3, p3))); p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w; vec4 m = max(0.6 - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0); m = m * m; return 42.0 * dot(m * m, vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3))); }
+
+            void main() {
+                // 1. 颜色混合：基于随机值，不再基于位置，强调混乱
+                float colorNoise = snoise(position * 0.05 + uTime * 0.1);
+                vColor = mix(uColor1, uColor2, smoothstep(-1.0, 1.0, colorNoise + random));
+
+                vec3 pos = position;
+                
+                // 2. 交互逻辑：
+                // 我们不使用固定的Target，而是让粒子根据手的位置偏移
+                
+                if (uHasHand > 0.5) {
+                    vec3 handPos = uHandPos;
+                    float d = distance(pos, handPos);
+                    
+                    // --- 握拳模式 (Fist) ---
+                    // 强大的黑洞引力
+                    if (uGrabFactor > 0.1) {
+                         // 平滑插值：当 uGrabFactor 接近 1，粒子被强制拉向手心
+                         vec3 dir = normalize(handPos - pos);
+                         
+                         // 引力范围是无限的 (全屏)，但越远越弱
+                         float gravityStrength = 200.0 / (d + 10.0); 
+                         gravityStrength = min(gravityStrength, 1.0); // 限制最大吸力
+                         
+                         // 施加拉力，同时保留一点原始位置的噪声，避免变成一个单点
+                         pos = mix(pos, handPos + (pos-handPos)*0.1, uGrabFactor * gravityStrength);
+                    }
+                    
+                    // --- 张开模式 (Open) ---
+                    // 全屏扩散 + 随手移动
+                    // 当手张开时，粒子不会被吸住，而是随着手的移动产生"拖拽"感的全屏扰动
+                    if (uGrabFactor < 0.9) {
+                        float openFactor = 1.0 - uGrabFactor;
+                        
+                        // 关键逻辑：让全屏粒子随手移动
+                        // 我们给粒子的原始位置加上一个偏移量，这个偏移量受手的位置影响
+                        // 离手越近，扰动越强，形成"手掌拨弄星河"的感觉
+                        
+                        float distFactor = 1.0 / (d * 0.05 + 1.0);
+                        
+                        // 噪声位移：让粒子在空间中无规则浮动
+                        float time = uTime * uChaosSpeed;
+                        vec3 noiseOffset = vec3(
+                            snoise(pos * 0.02 + time),
+                            snoise(pos * 0.02 + time + 100.0),
+                            snoise(pos * 0.02 + time + 200.0)
+                        ) * 30.0 * openFactor; // 张开时噪声变大
+                        
+                        // 跟随手的偏移 (Follow Force)
+                        // 让粒子群整体稍微向手的位置偏移，但保持全屏分布
+                        vec3 followOffset = (handPos - pos) * 0.2 * distFactor;
+                        
+                        pos += noiseOffset + followOffset;
+                    }
+                } else {
+                    // 无手状态：缓慢的宇宙漂移
+                    float time = uTime * 0.2;
+                    pos.x += snoise(pos * 0.01 + time) * 10.0;
+                    pos.y += snoise(pos * 0.01 + time + 100.0) * 10.0;
+                }
+
+                // 3. 大小计算 (不规则大小)
+                // 基于属性 size，距离衰减，以及是否被高亮
+                vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                
+                float finalSize = size;
+                // 握拳时粒子变小一点，增加致密感
+                if (uGrabFactor > 0.5) finalSize *= 0.8; 
+                
+                gl_PointSize = uBaseSize * finalSize * (80.0 / -mvPosition.z);
+                gl_Position = projectionMatrix * mvPosition;
+                
+                // 透明度随深度变化
+                vAlpha = smoothstep(200.0, 0.0, -mvPosition.z);
+            }
+        `,
+        fragmentShader: `
+            varying vec3 vColor;
+            varying float vAlpha;
+            
+            void main() {
+                // 绘制柔和的圆形粒子
+                vec2 center = gl_PointCoord - 0.5;
+                float dist = length(center);
+                // 更加柔和的边缘，模拟气态
+                float strength = exp(-dist * 4.0); 
+                
+                if (strength < 0.01) discard;
+                
+                gl_FragColor = vec4(vColor, strength * vAlpha);
+            }
+        `,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+    });
+
+    points = new THREE.Points(geometry, material);
+    scene.add(points);
+}
+
+// --- 5. UI ---
+function initUI() {
+    const gui = new GUI({ title: 'CHAOS CONTROL' });
+    
+    gui.addColor(params, 'color1').name('Nebula Color').onChange(v => material.uniforms.uColor1.value.set(v));
+    gui.addColor(params, 'color2').name('Star Color').onChange(v => material.uniforms.uColor2.value.set(v));
+    gui.add(params, 'baseSize', 0.1, 5.0).name('Particle Size').onChange(v => material.uniforms.uBaseSize.value = v * window.devicePixelRatio);
+    gui.add(params, 'chaosSpeed', 0.1, 2.0).name('Chaos Speed').onChange(v => material.uniforms.uChaosSpeed.value = v);
+    gui.add(params, 'bloomStrength', 0, 5).name('Glow Power').onChange(v => bloomPass.strength = v);
+}
+
+// --- 6. 动画 ---
+function animate() {
+    requestAnimationFrame(animate);
+    
+    const delta = clock.getDelta();
+    const elapsed = clock.getElapsedTime();
+    
+    // 平滑手势数据
+    state.smoothGrab += (state.grabValue - state.smoothGrab) * 0.1;
+    
+    material.uniforms.uTime.value = elapsed;
+    
+    // 只有当有手的时候，HandPos才会平滑更新，否则保持最后位置
+    if (state.hasHand) {
+        material.uniforms.uHandPos.value.lerp(state.handPos, 0.15); // 跟随灵敏度
+    }
+    
+    material.uniforms.uHasHand.value = state.hasHand ? 1.0 : 0.0;
+    material.uniforms.uGrabFactor.value = state.smoothGrab;
+    
+    // 摄像机微动，增加沉浸感
+    if (!state.hasHand) {
+        camera.position.x = Math.sin(elapsed * 0.1) * 10;
+        camera.position.y = Math.cos(elapsed * 0.1) * 10;
+        camera.lookAt(0,0,0);
+    }
+    
+    composer.render();
+}
+
+init();
+
+</script>
+</body>
+</html>
