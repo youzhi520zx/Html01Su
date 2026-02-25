@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Susu公主的专属城堡，一切为你而建，温柔的城堡，只属于你。" />
+  <title>Xiaopy - Susu's Castle</title>
+  
+  <!-- 引入 Google Fonts (解决手机端不显示楷体的问题) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- ZCOOL XiaoWei (类似宋体/楷体混合) 和 Noto Serif SC (衬线体) -->
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700&family=ZCOOL+XiaoWei&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      /* 配色微调，更加通透 */
+      --bg-color: #fff0f5;
+      --primary-color: #6a4a58;
+      --header-bg: rgba(232, 205, 224, 0.9); /* 增加透明度用于毛玻璃 */
+      --nav-bg: #d4a6c8;
+      --nav-hover: #c98fbb;
+      --button-bg: #e4bfd9;
+      --button-hover: #d09ec6;
+      --button-active: #c58fc1;
+      
+      /* 使用在线字体，保证全平台一致 */
+      --font-family-cursive: 'ZCOOL XiaoWei', serif; 
+      --font-family-serif: 'Noto Serif SC', serif;
+      
+      --shadow: 0 4px 15px rgba(212, 166, 200, 0.4);
+      --shadow-hover: 0 8px 20px rgba(212, 166, 200, 0.6);
+      --transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    }
+
+    *, *::before, *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: var(--font-family-serif);
+      background-color: var(--bg-color);
+      /* 添加唯美的背景渐变 */
+      background-image: radial-gradient(circle at top left, #fff9fc, #fff0f5);
+      color: var(--primary-color);
+      line-height: 1.6;
+      overflow-x: hidden;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+      text-align: center;
+    }
+
+    /* 头部优化：毛玻璃效果 */
+    header {
+      background-color: var(--header-bg);
+      backdrop-filter: blur(10px); /* 磨砂玻璃质感 */
+      -webkit-backdrop-filter: blur(10px);
+      padding: 15px 30px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky; /* 吸顶效果 */
+      top: 0;
+      z-index: 100;
+      box-shadow: var(--shadow);
+    }
+
+    .header-left h1 {
+      font-family: var(--font-family-cursive);
+      font-size: 1.8em;
+      color: #fff;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+      letter-spacing: 1px;
+    }
+
+    nav ul {
+      list-style: none;
+      display: flex;
+      gap: 15px;
+    }
+
+    nav ul li a {
+      text-decoration: none;
+      color: #fff;
+      padding: 8px 20px;
+      background-color: var(--nav-bg);
+      border-radius: 50px; /* 更圆润 */
+      transition: var(--transition);
+      font-size: 0.95em;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      display: inline-block;
+    }
+
+    nav ul li a:hover {
+      background-color: var(--nav-hover);
+      transform: translateY(-3px);
+      box-shadow: var(--shadow-hover);
+    }
+
+    /* 菜单按钮改为 button 标签 */
+    .menu-btn {
+      display: none;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 5px;
+    }
+    
+    .menu-btn svg {
+      width: 30px;
+      height: 30px;
+      fill: #fff;
+      filter: drop-shadow(0 2px 2px rgba(0,0,0,0.1));
+    }
+
+    main {
+      flex: 1;
+      padding: 80px 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .hero {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 35px;
+      animation: fadeIn 1s ease-out;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .hero h2 {
+      font-family: var(--font-family-cursive);
+      font-size: 2.8em;
+      color: var(--primary-color);
+      margin-bottom: 10px;
+    }
+
+    .hero p {
+      font-size: 1.2em;
+      max-width: 600px;
+      color: #8e6d7d;
+    }
+
+    /* 按钮通用样式优化 */
+    .btn {
+      padding: 14px 35px;
+      font-size: 1.1em;
+      background-color: var(--button-bg);
+      color: #fff;
+      border: 2px solid transparent;
+      border-radius: 50px;
+      cursor: pointer;
+      transition: var(--transition);
+      font-family: var(--font-family-cursive);
+      box-shadow: var(--shadow);
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .btn:hover {
+      background-color: #fff;
+      color: var(--button-active);
+      border-color: var(--button-active);
+      transform: translateY(-3px);
+      box-shadow: var(--shadow-hover);
+    }
+
+    /* 点名按钮 */
+    .roll-call-btn {
+      background: linear-gradient(135deg, #e4bfd9 0%, #d895c2 100%);
+      font-weight: bold;
+    }
+
+    footer {
+      background-color: rgba(228, 191, 217, 0.3);
+      color: var(--primary-color);
+      padding: 20px;
+      font-size: 0.9em;
+      border-top: 1px solid rgba(255,255,255,0.5);
+    }
+
+    /* --- 移动端适配 --- */
+    @media screen and (max-width: 768px) {
+      .menu-btn {
+        display: block;
+      }
+
+      nav ul {
+        flex-direction: column;
+        background-color: rgba(255, 255, 255, 0.95); /* 不透明背景，防止字重叠 */
+        position: absolute;
+        top: 70px;
+        right: 20px;
+        border-radius: 15px;
+        padding: 20px;
+        width: 220px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        
+        /* 动画初始状态 */
+        opacity: 0;
+        transform: translateY(-10px) scale(0.95);
+        pointer-events: none;
+        transition: all 0.3s ease;
+      }
+
+      nav ul.active {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+        pointer-events: auto;
+      }
+      
+      nav ul li a {
+        background: transparent;
+        color: var(--primary-color);
+        box-shadow: none;
+        border: 1px solid transparent;
+        width: 100%;
+      }
+      
+      nav ul li a:hover {
+        background: var(--bg-color);
+        border-color: var(--button-bg);
+        transform: none;
+      }
+
+      .header-left h1 {
+        font-size: 1.5em;
+      }
+    }
+
+    /* --- 验证弹窗 --- */
+    #verify-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(92, 74, 85, 0.6);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 10000;
+      backdrop-filter: blur(5px);
+      animation: fadeIn 0.3s ease;
+    }
+
+    #verify-box {
+      background: #fff;
+      border-radius: 20px;
+      padding: 40px;
+      max-width: 360px;
+      width: 85%;
+      box-shadow: 0 15px 40px rgba(0, 0, 0, 0.2);
+      text-align: center;
+      border: 4px solid var(--button-bg);
+      position: relative;
+      transform: scale(0.9);
+      animation: popUp 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+    }
+
+    @keyframes popUp {
+      to { transform: scale(1); }
+    }
+
+    #verify-box h3 {
+      margin-bottom: 20px;
+      color: var(--primary-color);
+      font-family: var(--font-family-cursive);
+      font-size: 1.5em;
+    }
+
+    /* 关闭按钮 */
+    .close-modal-btn {
+      position: absolute;
+      top: 10px;
+      right: 15px;
+      font-size: 24px;
+      color: #999;
+      cursor: pointer;
+      background: none;
+      border: none;
+      transition: color 0.3s;
+    }
+    .close-modal-btn:hover {
+      color: var(--primary-color);
+    }
+
+    #error-msg {
+      margin-top: 15px;
+      color: #d9534f;
+      font-size: 0.9em;
+      display: none;
+    }
+    
+    .loading-spinner {
+      display: none;
+      margin-top: 10px;
+      font-size: 0.9rem;
+      color: #888;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <div class="header-left">
+      <h1>Susu's Castle</h1>
+    </div>
+
+    <!-- 菜单按钮优化为 button -->
+    <button class="menu-btn" aria-label="Toggle navigation menu">
+      <svg viewBox="0 0 100 80" xmlns="http://www.w3.org/2000/svg">
+        <rect width="100" height="15" rx="8"></rect>
+        <rect y="30" width="100" height="15" rx="8"></rect>
+        <rect y="60" width="100" height="15" rx="8"></rect>
+      </svg>
+    </button>
+
+    <nav>
+      <ul>
+        <li><a href="index.html">首页</a></li>
+        <li><a href="#">关于</a></li>
+        <li><a href="https://xiaopy.dpdns.org/Susu/%E5%AF%BC%E8%88%AA%E6%A0%8F.html">作品</a></li>
+        <li><a href="https://xiaopy.dpdns.org/Susu/%E8%81%94%E7%B3%BB%E6%96%B9%E5%BC%8F/%E8%81%94%E7%B3%BB%E6%96%B9%E5%BC%8F.html">联系</a></li>
+        <li><a href="#">测试</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h2>Susu 的公主专属空间</h2>
+      <p>一切为你而建，温柔的城堡，只属于你 ✨</p>
+      
+      <button id="enter-btn" class="btn">
+        <span>🔐</span> 进入资源宝库
+      </button>
+      
+      <a href="https://xiaopy.dpdns.org/CQYZ/%E5%AD%A6%E7%94%9F%E5%90%8D%E5%8D%95.html" class="btn roll-call-btn">
+        <span>📝</span> CQYZ_25_BigData_2
+      </a>
+    </section>
+  </main>
+
+  <footer>
+    <p>© 2025 Susu公主的世界 | Keep Magic Alive ✨</p>
+  </footer>
+
+  <!-- 验证弹窗 -->
+  <div id="verify-overlay">
+    <div id="verify-box">
+      <!-- 新增关闭按钮 -->
+      <button class="close-modal-btn" onclick="closeModal()">&times;</button>
+      
+      <h3>请完成验证，宝宝~</h3>
+      
+      <div
+        class="cf-turnstile"
+        data-sitekey="0x4AAAAAABfWQxyoopTMa6Qt"
+        data-callback="turnstileCallback"
+        data-expired-callback="turnstileExpired"
+      ></div>
+      
+      <div id="loading-msg" class="loading-spinner">正在通往城堡...</div>
+      <p id="error-msg">验证失败，请重试。</p>
+    </div>
+  </div>
+
+  <script defer>
+    // 菜单逻辑
+    const menuBtn = document.querySelector('.menu-btn');
+    const navMenu = document.querySelector('nav ul');
+
+    menuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      navMenu.classList.toggle('active');
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!menuBtn.contains(e.target) && !navMenu.contains(e.target)) {
+        navMenu.classList.remove('active');
+      }
+    });
+
+    // 验证弹窗逻辑
+    const enterBtn = document.getElementById('enter-btn');
+    const overlay = document.getElementById('verify-overlay');
+    const errorMsg = document.getElementById('error-msg');
+    const loadingMsg = document.getElementById('loading-msg');
+
+    // 打开弹窗
+    enterBtn.addEventListener('click', () => {
+      overlay.style.display = 'flex';
+    });
+
+    // 关闭弹窗函数
+    window.closeModal = function() {
+      overlay.style.display = 'none';
+      errorMsg.style.display = 'none';
+      // 如果需要重置验证器，可能需要刷新页面或调用 turnstile.reset()，视API而定
+    }
+
+    // 点击遮罩层也可以关闭
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        closeModal();
+      }
+    });
+
+    function turnstileCallback(token) {
+      errorMsg.style.display = 'none';
+      loadingMsg.style.display = 'block';
+
+      fetch('verify.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `cf-turnstile-response=${token}`
+      })
+      .then(res => res.json())
+      .then(data => {
+        loadingMsg.style.display = 'none';
+        if (data.success) {
+          window.location.href = 'more.html';
+        } else {
+          errorMsg.textContent = data.msg || '验证失败，宝贝，别闹！';
+          errorMsg.style.display = 'block';
+        }
+      })
+      .catch(() => {
+        loadingMsg.style.display = 'none';
+        errorMsg.textContent = '网络错误，请检查网络~';
+        errorMsg.style.display = 'block';
+      });
+    }
+
+    function turnstileExpired() {
+      errorMsg.textContent = '验证已过期，请重新验证~';
+      errorMsg.style.display = 'block';
+    }
+
+    window.turnstileCallback = turnstileCallback;
+    window.turnstileExpired = turnstileExpired;
+  </script>
+
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+</body>
+</html>
